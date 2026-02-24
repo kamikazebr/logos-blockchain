@@ -1,13 +1,14 @@
 use std::{num::NonZero, time::Duration};
 
-use futures::StreamExt as _;
+use futures::{StreamExt as _, stream};
 use logos_blockchain_tests::{
-    common::time::max_block_propagation_time,
+    common::{sync::print_validators_info, time::max_block_propagation_time},
     nodes::{Validator, create_validator_config},
     topology::configs::{
         create_general_configs, deployment::e2e_deployment_settings_with_genesis_tx,
     },
 };
+use tokio::time::Instant;
 
 const TARGET_IMMUTABLE_BLOCK_COUNT: u32 = 5;
 
@@ -15,7 +16,7 @@ const TARGET_IMMUTABLE_BLOCK_COUNT: u32 = 5;
 // ```bash
 // cargo test -p logos-blockchain-tests blend_debug_setup -- --nocapture --ignored
 // ```
-#[ignore = "For local debugging"]
+// #[ignore = "For local debugging"]
 #[tokio::test]
 async fn blend_debug_setup() {
     let (configs, genesis_tx) = create_general_configs(4);
@@ -31,7 +32,7 @@ async fn blend_debug_setup() {
                 .service
                 .bootstrap
                 .prolonged_bootstrap_period = Duration::ZERO;
-            config.deployment.cryptarchia.security_param = NonZero::new(5).unwrap();
+            config.deployment.cryptarchia.security_param = NonZero::new(2).unwrap();
 
             config
         })
@@ -64,15 +65,25 @@ async fn blend_debug_setup() {
 
     tokio::pin!(stream1);
 
-    let timeout = tokio::time::sleep(timeout);
+    let deadline = Instant::now() + timeout;
+    let mut ticker = tokio::time::interval(Duration::from_secs(1));
 
-    tokio::select! {
-        () = timeout => panic!("Timed out waiting for matching LIBs"),
-        () = async {
-            while let Some(lib1) = stream1.next().await {
-                println!("Node 1 LIB: height={}", lib1.height);
+    loop {
+        tokio::select! {
+            () = tokio::time::sleep_until(deadline) => panic!("Timed out waiting for matching LIBs"),
+            () = async {
+                while let Some(lib1) = stream1.next().await {
+                    println!("Node 1 LIB: height={}", lib1.height);
 
+                }
+            } => {},
+            _ = ticker.tick() => {
+                let infos: Vec<_> = stream::iter(&nodes)
+                    .then(async |n| { n.consensus_info(false).await })
+                    .collect()
+                    .await;
+                print_validators_info(&infos);
             }
-        } => {}
+        }
     }
 }

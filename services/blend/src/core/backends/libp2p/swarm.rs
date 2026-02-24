@@ -522,7 +522,7 @@ where
                 }
             }
             _ => {
-                tracing::debug!(target: LOG_TARGET, "Received event from blend network that will be ignored.");
+                tracing::debug!(target: LOG_TARGET, ?event, "Received event from blend network that will be ignored");
                 tracing::trace!(counter.ignored_event = 1);
             }
         }

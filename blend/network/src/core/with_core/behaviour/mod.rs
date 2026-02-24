@@ -33,6 +33,7 @@ use libp2p::{
         dummy::ConnectionHandler as DummyConnectionHandler,
     },
 };
+use tracing::warn;
 
 use crate::core::with_core::{
     behaviour::{
@@ -384,6 +385,7 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
             self.try_wake();
             Ok(())
         } else {
+            warn!(target: LOG_TARGET, negotiated=self.negotiated_peers.len(), after_exclude=self.negotiated_peers.iter().filter(|(peer_id, _)| excluded_peer != Some(**peer_id)).count(), after_filter_healthy=self.negotiated_peers.iter().filter(|(peer_id, _)| excluded_peer != Some(**peer_id)).filter(|(_, peer_state)| peer_state.negotiated_state.is_healthy()).count(), "NO PEERS");
             Err(Error::NoPeers)
         }
     }

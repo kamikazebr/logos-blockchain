@@ -78,7 +78,7 @@ use overwatch::{
 use rand::{RngCore, SeedableRng as _, seq::SliceRandom as _};
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use crate::{
     core::{
@@ -1097,6 +1097,8 @@ where
                     membership: new_membership,
                 },
         })) => {
+            warn!(target: LOG_TARGET, "NEW SESSION EVENT: {new_session}");
+
             let (_, _, _, _, current_session_blending_token_collector, _, state_updater) =
                 current_recovery_checkpoint.into_components();
 
@@ -1184,6 +1186,8 @@ where
             }
         }
         SessionEvent::NewSession(MaybeEmptyCoreSessionInfo::Empty { session }) => {
+            warn!(target: LOG_TARGET, "NEW SESSION EVENT: {session}: EMPTY CORE SESSION INFO");
+
             tracing::info!(target: LOG_TARGET, "New session event received, but no session info is available due to empty membership set.");
             let (_, _, _, _, current_session_blending_token_collector, _, _) =
                 current_recovery_checkpoint.into_components();
@@ -1205,6 +1209,8 @@ where
             }
         }
         SessionEvent::TransitionPeriodExpired => {
+            warn!(target: LOG_TARGET, "STP EXPIRED");
+
             let mut state_updater = current_recovery_checkpoint.start_updating();
 
             if let Some(old_token_collector) = state_updater.clear_old_session_token_collector() {
@@ -1440,6 +1446,8 @@ where
     BackendSettings: Clone,
     ProofsVerifier: ProofsVerifierTrait,
 {
+    warn!(target: LOG_TARGET, "HANDLING INCOMING BLEND MESSAGE");
+
     // First, try to decapsulate with the current session crypto processor.
     // If that fails, try with the old session crypto processor, if any.
     match cryptographic_processor
@@ -1680,6 +1688,8 @@ where
     ProofsVerifier: ProofsVerifierTrait,
     NetAdapter: NetworkAdapter<RuntimeServiceId, BroadcastSettings: Eq + Hash> + Sync,
 {
+    warn!(target: LOG_TARGET, "HANDLING RELEASE ROUND");
+
     let (processed_messages, should_generate_cover_message) =
         release_type.map_or_else(|| (vec![], false), RoundReleaseType::into_components);
     let (data_count, processed_count, cover_count) = (
@@ -1753,6 +1763,8 @@ async fn handle_release_round_for_old_session<
     Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync,
     NetAdapter: NetworkAdapter<RuntimeServiceId, BroadcastSettings: Eq + Hash> + Sync,
 {
+    warn!(target: LOG_TARGET, "HANDLING RELEASE ROUND FOR OLD SESSION");
+
     let mut futures = build_futures_to_release_processed_messages(
         processed_messages_to_release,
         backend,
@@ -1801,8 +1813,12 @@ where
                     ProcessedMessage::Network(NetworkMessage {
                         broadcast_settings,
                         message,
-                    }) => network_adapter.broadcast(message, broadcast_settings).boxed(),
+                    }) => {
+                        warn!(target: LOG_TARGET, "BROADCASTING MESSAGE");
+                        network_adapter.broadcast(message, broadcast_settings).boxed()
+                    },
                     ProcessedMessage::Encapsulated(encapsulated_message) => {
+                        warn!(target: LOG_TARGET, "PUBLISHING ENCAPSULATED MESSAGE TO BLEND PEERS");
                         backend.publish(*encapsulated_message).boxed()
                     }
                 }
@@ -2025,7 +2041,7 @@ where
     ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator>,
     ProofsVerifier: ProofsVerifierTrait,
 {
-    tracing::debug!(target: LOG_TARGET, "Received new secret PoL info for the epoch: {new_pol_info:?}. Updating the cryptographic processor...");
+    tracing::warn!(target: LOG_TARGET, "Received new secret PoL info for the epoch: {new_pol_info:?}. Updating the cryptographic processor...");
     let new_leader_inputs = LeaderInputs {
         pol_ledger_aged: new_pol_info.poq_public_inputs.aged_root,
         pol_epoch_nonce: new_pol_info.poq_public_inputs.epoch_nonce,

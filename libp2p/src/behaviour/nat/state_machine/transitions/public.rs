@@ -1,3 +1,5 @@
+use tracing::error;
+
 use crate::behaviour::nat::state_machine::{
     Command, CommandTx, OnEvent, State, event::Event, states::Public,
 };
@@ -36,18 +38,20 @@ impl OnEvent for State<Public> {
                 }
             }
             Event::ExternalAddressConfirmed(addr) => {
-                panic!(
+                error!(
                     "State<Public>: Swarm confirmed external address {}, but {} was expected",
                     addr,
                     self.state.address(),
                 );
+                self
             }
             Event::AutonatClientTestOk(addr) | Event::AutonatClientTestFailed(addr) => {
-                panic!(
+                error!(
                     "State<Public>: Autonat client reported address {}, but {} was expected",
                     addr,
                     self.state.address(),
                 );
+                self
             }
             _ => self,
         }

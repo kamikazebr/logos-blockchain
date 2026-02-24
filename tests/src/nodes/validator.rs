@@ -61,9 +61,8 @@ pub struct Validator {
 
 impl Drop for Validator {
     fn drop(&mut self) {
-        if std::thread::panicking()
-            && let Err(e) = persist_tempdir(&mut self.tempdir, "logos-blockchain-node")
-        {
+        // if std::thread::panicking()
+        if let Err(e) = persist_tempdir(&mut self.tempdir, "logos-blockchain-node") {
             println!("failed to persist tempdir: {e}");
         }
 
@@ -103,10 +102,12 @@ impl Validator {
         let mut deployment_config_file = NamedTempFile::new().unwrap();
 
         if !*IS_DEBUG_TRACING {
+            let log_dir = dir.path().to_owned();
+            println!("LOG DIR: {}", log_dir.display());
             // setup logging so that we can intercept it later in testing
             config.user.tracing.logger = tracing::logger::Layers {
                 file: Some(tracing::logger::FileConfig {
-                    directory: dir.path().to_owned(),
+                    directory: log_dir,
                     prefix: Some(LOGS_PREFIX.into()),
                 }),
                 loki: None,
