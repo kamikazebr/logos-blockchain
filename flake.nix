@@ -78,16 +78,21 @@
               inherit logosBlockchainDependencies;
 
               postInstall = ''
-                mkdir -p $out/circuits $out/include
-                cp -r ${logos-blockchain-circuits.packages.${system}.default}/* $out/circuits/
+                mkdir -p $out/include
                 cp c-bindings/logos_blockchain.h $out/include/
+              '' + pkgs.lib.optionalString pkgs.stdenv.isDarwin ''
+                install_name_tool -id @rpath/liblogos_blockchain.dylib $out/lib/liblogos_blockchain.dylib
+              '';
+
+              # To avoid mangling from Linux and MacOS, the circuits need to be copied as late as possible
+              postFixup = ''
+                mkdir -p $out/circuits
+                cp -r ${logos-blockchain-circuits.packages.${system}.default}/* $out/circuits/
 
                 # Files copied from the Nix store are read-only.
                 # Crane modifies files in $out after install, so they must be writable during the build.
                 # Nix makes the final output read-only again, so this is safe.
                 chmod -R u+w $out/circuits
-              '' + pkgs.lib.optionalString pkgs.stdenv.isDarwin ''
-                install_name_tool -id @rpath/liblogos_blockchain.dylib $out/lib/liblogos_blockchain.dylib
               '';
             }
           );
