@@ -342,7 +342,7 @@ where
 ///   stream.
 #[expect(
     clippy::too_many_arguments,
-    reason = "We will remove the workaround of gossipsubbing directly shortly."
+    reason = "We will remove the workaround of gossipsubbing directly once Blend moves to slot-based scheduling."
 )]
 async fn run<
     Backend,
@@ -432,8 +432,8 @@ where
                             handler.handle_message_to_blend(serialized_message.clone()).await;
                         }
                     }
-                    ServiceMessage::Broadcast(network_message) => {
-                        network_adapter.broadcast(network_message.message, network_message.broadcast_settings).await;
+                    ServiceMessage::Broadcast(NetworkMessage { broadcast_settings, message }) => {
+                        network_adapter.broadcast(message, broadcast_settings).await;
                     }
                 }
             }

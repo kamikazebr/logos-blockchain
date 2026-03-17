@@ -88,7 +88,6 @@ pub async fn spawn_run(
         .map(|membership| MembershipInfo::from_membership_and_session_number(membership, 1));
 
     let settings = settings(local_node, minimal_network_size, node_id_sender);
-    let overwatch_handle = overwatch_handle();
     let join_handle = tokio::spawn(async move {
         Box::pin(run::<
             TestBackend,
@@ -111,7 +110,7 @@ pub async fn spawn_run(
             ReceiverStream::new(msg_receiver),
             EpochHandler::new(TestChainService, 1.try_into().unwrap()),
             settings,
-            &overwatch_handle,
+            &overwatch_handle(),
             &TestNetworkAdapter,
             || {},
         ))

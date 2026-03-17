@@ -891,8 +891,8 @@ where
                             recovery_checkpoint = handle_serialized_local_data_message(&serialized_data_message, &mut crypto_processor, &mut message_scheduler, recovery_checkpoint).await;
                         }
                     },
-                    ServiceMessage::Broadcast(message_to_blend) => {
-                        network_adapter.broadcast(message_to_blend.message, message_to_blend.broadcast_settings).await;
+                    ServiceMessage::Broadcast(NetworkMessage { broadcast_settings, message }) => {
+                        network_adapter.broadcast(message, broadcast_settings).await;
                     },
                 }
             }

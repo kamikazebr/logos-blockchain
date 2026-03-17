@@ -672,6 +672,7 @@ where
         }
         debug!(target: LOG_TARGET, "Successfully applied our own proposed block. Publishing it to the blend network: {:?}", block.header().id());
 
+        // TODO: Remove this logic once Blend moves to slot-based scheduling.
         if is_new_blend_session {
             blend_adapter.broadcast_proposal(block.to_proposal()).await;
         } else {
