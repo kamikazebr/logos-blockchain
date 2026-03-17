@@ -7,6 +7,7 @@ pub enum ServiceMessage<BroadcastSettings> {
     /// To send a message to the blend network and eventually broadcast it to
     /// the [`NetworkService`].
     Blend(NetworkMessage<BroadcastSettings>),
+    Broadcast(NetworkMessage<BroadcastSettings>),
 }
 
 /// A message that is sent to the blend network.

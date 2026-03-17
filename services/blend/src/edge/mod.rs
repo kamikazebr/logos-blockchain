@@ -28,6 +28,7 @@ use lb_key_management_system_service::{
     api::KmsServiceApi, keys::KeyOperators,
     operators::ed25519::exfiltrate_secret_key::LeakSecretKeyOperator,
 };
+use lb_network_service::NetworkService;
 use lb_services_utils::wait_until_services_are_ready;
 use lb_time_service::{SlotTick, TimeService, TimeServiceMessage};
 use overwatch::{
@@ -39,7 +40,6 @@ use overwatch::{
         state::{NoOperator, NoState},
     },
 };
-use serde::{Serialize, de::DeserializeOwned};
 pub(crate) use service_components::ServiceComponents;
 use settings::StartingBlendConfig;
 use tokio::sync::oneshot;
@@ -56,6 +56,7 @@ use crate::{
     kms::PreloadKmsService,
     membership::{self, MembershipInfo},
     message::{NetworkMessage, ServiceMessage},
+    network::NetworkAdapter,
     settings::FIRST_STREAM_ITEM_READY_TIMEOUT,
 };
 
@@ -72,15 +73,16 @@ type EpochInfoAndHandler<Backend, NodeId, ProofsGenerator, RuntimeServiceId> = (
 pub struct BlendService<
     Backend,
     NodeId,
-    BroadcastSettings,
     MembershipAdapter,
     ProofsGenerator,
     TimeBackend,
     ChainService,
     PolInfoProvider,
+    Network,
     RuntimeServiceId,
 > where
     Backend: BlendBackend<NodeId, RuntimeServiceId>,
+    Network: NetworkAdapter<RuntimeServiceId>,
     NodeId: Clone,
 {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
@@ -90,39 +92,41 @@ pub struct BlendService<
         TimeBackend,
         ChainService,
         PolInfoProvider,
+        Network,
     )>,
 }
 
 impl<
     Backend,
     NodeId,
-    BroadcastSettings,
     MembershipAdapter,
     ProofsGenerator,
     TimeBackend,
     ChainService,
     PolInfoProvider,
+    Network,
     RuntimeServiceId,
 > ServiceData
     for BlendService<
         Backend,
         NodeId,
-        BroadcastSettings,
         MembershipAdapter,
         ProofsGenerator,
         TimeBackend,
         ChainService,
         PolInfoProvider,
+        Network,
         RuntimeServiceId,
     >
 where
     Backend: BlendBackend<NodeId, RuntimeServiceId>,
     NodeId: Clone,
+    Network: NetworkAdapter<RuntimeServiceId>,
 {
     type Settings = StartingBlendConfig<Backend::Settings>;
     type State = NoState<Self::Settings>;
     type StateOperator = NoOperator<Self::State>;
-    type Message = ServiceMessage<BroadcastSettings>;
+    type Message = ServiceMessage<Network::BroadcastSettings>;
 }
 
 #[expect(clippy::too_many_lines, reason = "TODO: Address this at some point.")]
@@ -130,40 +134,41 @@ where
 impl<
     Backend,
     NodeId,
-    BroadcastSettings,
     MembershipAdapter,
     ProofsGenerator,
     TimeBackend,
     ChainService,
     PolInfoProvider,
+    Network,
     RuntimeServiceId,
 > ServiceCore<RuntimeServiceId>
     for BlendService<
         Backend,
         NodeId,
-        BroadcastSettings,
         MembershipAdapter,
         ProofsGenerator,
         TimeBackend,
         ChainService,
         PolInfoProvider,
+        Network,
         RuntimeServiceId,
     >
 where
     Backend: BlendBackend<NodeId, RuntimeServiceId> + Send + Sync,
     NodeId: Clone + Debug + Eq + Hash + Send + Sync + 'static,
-    BroadcastSettings: Serialize + DeserializeOwned + Send,
     MembershipAdapter: membership::Adapter<NodeId = NodeId, Error: Send + Sync + 'static> + Send,
     membership::ServiceMessage<MembershipAdapter>: Send + Sync + 'static,
     ProofsGenerator: LeaderProofsGenerator + Send,
     TimeBackend: lb_time_service::backends::TimeBackend + Send,
     ChainService: CryptarchiaServiceData<Tx: Send + Sync>,
     PolInfoProvider: PolInfoProviderTrait<RuntimeServiceId, Stream: Send + Unpin + 'static> + Send,
+    Network: NetworkAdapter<RuntimeServiceId, BroadcastSettings: Eq + Hash + Unpin> + Send + Sync,
     RuntimeServiceId: AsServiceId<<MembershipAdapter as membership::Adapter>::Service>
         + AsServiceId<Self>
         + AsServiceId<TimeService<TimeBackend, RuntimeServiceId>>
         + AsServiceId<ChainService>
         + AsServiceId<PreloadKmsService<RuntimeServiceId>>
+        + AsServiceId<NetworkService<Network::Backend, RuntimeServiceId>>
         + Display
         + Debug
         + Clone
@@ -202,9 +207,19 @@ where
             Some(Duration::from_secs(60)),
             TimeService<_, _>,
             <MembershipAdapter as membership::Adapter>::Service,
-            PreloadKmsService<_>
+            PreloadKmsService<_>,
+            NetworkService<_, _>
         )
         .await?;
+
+        let network_adapter = async {
+            let network_relay = overwatch_handle
+                .relay::<NetworkService<_, _>>()
+                .await
+                .expect("Relay with network service should be available.");
+            Network::new(network_relay)
+        }
+        .await;
 
         let kms = KmsServiceApi::<PreloadKmsService<_>, RuntimeServiceId>::new(
             overwatch_handle.relay::<PreloadKmsService<_>>().await?,
@@ -256,12 +271,6 @@ where
         }
         .await;
 
-        let messages_to_blend_stream = inbound_relay.map(|ServiceMessage::Blend(message)| {
-            NetworkMessage::<BroadcastSettings>::to_bytes(&message)
-                .expect("NetworkMessage should be able to be serialized")
-                .to_vec()
-        });
-
         let epoch_handler = async {
             let chain_service = CryptarchiaServiceApi::<ChainService, _>::new(
                 overwatch_handle
@@ -276,14 +285,14 @@ where
         }
         .await;
 
-        run::<Backend, _, ProofsGenerator, _, PolInfoProvider, _>(
+        run::<Backend, _, ProofsGenerator, _, PolInfoProvider, _, _>(
             UninitializedSessionEventStream::new(
                 session_stream,
                 FIRST_STREAM_ITEM_READY_TIMEOUT,
                 settings.time.session_transition_period(),
             ),
             clock_stream,
-            messages_to_blend_stream,
+            inbound_relay,
             epoch_handler,
             RunningSettings::<Backend, _, _> {
                 backend: settings.backend,
@@ -295,6 +304,7 @@ where
                 data_replication_factor: settings.data_replication_factor,
             },
             &overwatch_handle,
+            &network_adapter,
             || {
                 status_updater.notify_ready();
                 info!(
@@ -330,15 +340,30 @@ where
 /// # Panics
 /// - If the initial membership is not yielded immediately from the session
 ///   stream.
-async fn run<Backend, NodeId, ProofsGenerator, ChainService, PolInfoProvider, RuntimeServiceId>(
+#[expect(
+    clippy::too_many_arguments,
+    reason = "We will remove the workaround of gossipsubbing directly shortly."
+)]
+async fn run<
+    Backend,
+    NodeId,
+    ProofsGenerator,
+    ChainService,
+    PolInfoProvider,
+    Network,
+    RuntimeServiceId,
+>(
     session_stream: UninitializedSessionEventStream<
         impl Stream<Item = MembershipInfo<NodeId>> + Unpin,
     >,
     mut clock_stream: impl Stream<Item = SlotTick> + Unpin,
-    mut incoming_message_stream: impl Stream<Item = Vec<u8>> + Send + Unpin,
+    mut incoming_message_stream: impl Stream<Item = ServiceMessage<Network::BroadcastSettings>>
+    + Send
+    + Unpin,
     mut epoch_handler: EpochHandler<ChainService, RuntimeServiceId>,
     settings: RunningSettings<Backend, NodeId, RuntimeServiceId>,
     overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
+    network_adapter: &Network,
     notify_ready: impl Fn(),
 ) -> Result<(), Error>
 where
@@ -347,6 +372,7 @@ where
     ProofsGenerator: LeaderProofsGenerator + Send,
     ChainService: ChainApi<RuntimeServiceId> + Send + Sync,
     PolInfoProvider: PolInfoProviderTrait<RuntimeServiceId, Stream: Unpin>,
+    Network: NetworkAdapter<RuntimeServiceId> + Send + Sync,
     RuntimeServiceId: Clone + Send + Sync,
 {
     let (mut current_membership_info, mut remaining_session_stream) = session_stream
@@ -393,14 +419,22 @@ where
                 }
             }
             Some(message) = incoming_message_stream.next() => {
-                // TODO: Investigate why secret PoL info at times arrives after the block proposal.
-                let Some(handler) = current_pol_info_and_message_handler.as_mut().map(|(_, handler)| handler) else {
-                    tracing::warn!(target: LOG_TARGET, "Received a message to blend, but no active message handler is available to process it because the secret PoL info for the current epoch is not yet available. Ignoring the message.");
-                    continue;
-                };
-                let message_copies = settings.data_replication_factor.checked_add(1).unwrap();
-                for _ in 0..message_copies {
-                    handler.handle_message_to_blend(message.clone()).await;
+                match message {
+                    ServiceMessage::Blend(network_message) => {
+                        // TODO: Investigate why secret PoL info at times arrives after the block proposal.
+                        let Some(handler) = current_pol_info_and_message_handler.as_mut().map(|(_, handler)| handler) else {
+                            tracing::warn!(target: LOG_TARGET, "Received a message to blend, but no active message handler is available to process it because the secret PoL info for the current epoch is not yet available. Ignoring the message.");
+                            continue;
+                        };
+                        let message_copies = settings.data_replication_factor.checked_add(1).unwrap();
+                        let serialized_message = NetworkMessage::<Network::BroadcastSettings>::to_bytes(&network_message).expect("NetworkMessage should be able to be serialized").to_vec();
+                        for _ in 0..message_copies {
+                            handler.handle_message_to_blend(serialized_message.clone()).await;
+                        }
+                    }
+                    ServiceMessage::Broadcast(network_message) => {
+                        network_adapter.broadcast(network_message.message, network_message.broadcast_settings).await;
+                    }
                 }
             }
             Some(clock_tick) = clock_stream.next() => {

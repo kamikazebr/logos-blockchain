@@ -23,6 +23,7 @@ use lb_core::{
         gas::MainnetGasConstants, ops::leader_claim::LeaderClaimOp,
     },
     proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate, LeaderPublic},
+    sdp::ServiceType,
 };
 use lb_cryptarchia_engine::Slot;
 use lb_key_management_system_service::{api::KmsServiceApi, keys::Ed25519Key};
@@ -456,8 +457,8 @@ where
                             )
                             .await
                             {
-                                Ok(block) => {
-                                    Self::apply_and_publish_block_proposal(block, &chain_network_api, &blend_adapter).await;
+                                Ok((block, new_blend_session)) => {
+                                    Self::apply_and_publish_block_proposal(block, &chain_network_api, &blend_adapter, new_blend_session).await;
                                 }
                                 Err(e) => {
                                     error!(target: LOG_TARGET, "{e}");
@@ -572,7 +573,7 @@ where
         >,
         mut ledger_state: LedgerState,
         ledger_config: &lb_ledger::Config,
-    ) -> Result<Block<Mempool::Item>, Error> {
+    ) -> Result<(Block<Mempool::Item>, bool), Error> {
         let txs_stream = relays
             .mempool_adapter()
             .get_mempool_view([0; 32].into())
@@ -581,9 +582,21 @@ where
 
         let mut tx_stream: Pin<Box<_>> = Box::pin(txs_stream);
 
+        let blend_session_before = *ledger_state
+            .active_sessions()
+            .get(&ServiceType::BlendNetwork)
+            .unwrap();
+
         ledger_state = ledger_state
             .clone()
             .try_apply_header::<Groth16LeaderProof, HeaderId>(slot, &proof, ledger_config)?;
+
+        let blend_session_after = *ledger_state
+            .active_sessions()
+            .get(&ServiceType::BlendNetwork)
+            .unwrap();
+
+        let is_new_blend_session = blend_session_after > blend_session_before;
 
         let mut valid_txs = Vec::new();
         let mut invalid_tx_hashes = Vec::new();
@@ -626,6 +639,12 @@ where
 
         let block = Block::create(parent, slot, proof, txs, signing_key)?;
 
+        if is_new_blend_session {
+            debug!(
+                "proposed block with id {:?} triggers a new Blend session {blend_session_after:?}.",
+                block.header().id()
+            );
+        }
         info!(
             "proposed block with id {:?} containing {} transactions ({} removed)",
             block.header().id(),
@@ -633,7 +652,7 @@ where
             invalid_tx_hashes.len()
         );
 
-        Ok(block)
+        Ok((block, is_new_blend_session))
     }
 
     /// Apply our own proposed block to the chain and publish it to the blend
@@ -642,6 +661,7 @@ where
         block: Block<Mempool::Item>,
         chain_network_api: &ChainNetworkServiceApi<ChainNetwork, RuntimeServiceId>,
         blend_adapter: &BlendAdapter<BlendService>,
+        is_new_blend_session: bool,
     ) {
         if let Err(e) = chain_network_api
             .apply_block_and_reconcile_mempool(block.clone())
@@ -652,7 +672,11 @@ where
         }
         debug!(target: LOG_TARGET, "Successfully applied our own proposed block. Publishing it to the blend network: {:?}", block.header().id());
 
-        blend_adapter.publish_proposal(block.to_proposal()).await;
+        if is_new_blend_session {
+            blend_adapter.broadcast_proposal(block.to_proposal()).await;
+        } else {
+            blend_adapter.blend_proposal(block.to_proposal()).await;
+        }
     }
 
     async fn handle_inbound_message(

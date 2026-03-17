@@ -44,7 +44,7 @@ impl<
     >
 where
     Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId>,
-    Network: crate::core::network::NetworkAdapter<RuntimeServiceId>,
+    Network: crate::network::NetworkAdapter<RuntimeServiceId>,
 {
     type NetworkAdapter = Network;
     type BackendSettings = Backend::Settings;
@@ -55,7 +55,7 @@ where
 
 pub type NetworkBackendOfService<Service, RuntimeServiceId> = <<Service as ServiceComponents<
     RuntimeServiceId,
->>::NetworkAdapter as crate::core::network::NetworkAdapter<RuntimeServiceId>>::Backend;
+>>::NetworkAdapter as crate::network::NetworkAdapter<RuntimeServiceId>>::Backend;
 pub type BlendBackendSettingsOfService<Service, RuntimeServiceId> =
     <Service as ServiceComponents<RuntimeServiceId>>::BackendSettings;
 
@@ -71,7 +71,9 @@ impl<BroadcastSettings> MessageComponents for ServiceMessage<BroadcastSettings> 
     type BroadcastSettings = BroadcastSettings;
 
     fn into_components(self) -> (Self::Payload, Self::BroadcastSettings) {
-        let Self::Blend(network_message) = self;
-        (network_message.message, network_message.broadcast_settings)
+        let message = match self {
+            Self::Blend(network_message) | Self::Broadcast(network_message) => network_message,
+        };
+        (message.message, message.broadcast_settings)
     }
 }

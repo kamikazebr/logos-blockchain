@@ -37,25 +37,23 @@ use lb_chain_service::Epoch;
 use lb_core::{crypto::ZkHash, sdp::SessionNumber};
 use lb_groth16::{Field as _, Fr};
 use lb_key_management_system_service::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
-use lb_network_service::{NetworkService, backends::NetworkBackend};
 use lb_poq::CorePathAndSelectors;
 use lb_sdp_service::SdpMessage;
 use overwatch::{
     overwatch::{OverwatchHandle, commands::OverwatchCommand},
-    services::{ServiceData, relay::OutboundRelay, state::StateUpdater},
+    services::{relay::OutboundRelay, state::StateUpdater},
 };
 use tempfile::NamedTempFile;
 use tokio::sync::{
     broadcast::{self},
     mpsc, watch,
 };
-use tokio_stream::wrappers::{BroadcastStream, ReceiverStream};
+use tokio_stream::wrappers::ReceiverStream;
 
 use crate::{
     core::{
         backends::{BlendBackend, EpochInfo, PublicInfo, SessionInfo},
         kms::KmsPoQAdapter,
-        network::NetworkAdapter,
         processor::CoreCryptographicProcessor,
         settings::{
             CoverTrafficSettings, MessageDelayerSettings, RunningBlendConfig as BlendConfig,
@@ -222,56 +220,6 @@ pub async fn wait_for_blend_backend_event(
         if received_event == event {
             return;
         }
-    }
-}
-
-pub struct TestNetworkAdapter;
-
-#[async_trait]
-impl<RuntimeServiceId> NetworkAdapter<RuntimeServiceId> for TestNetworkAdapter {
-    type Backend = TestNetworkBackend;
-    type BroadcastSettings = ();
-
-    fn new(
-        _network_relay: OutboundRelay<
-            <NetworkService<Self::Backend, RuntimeServiceId> as ServiceData>::Message,
-        >,
-    ) -> Self {
-        Self
-    }
-
-    async fn broadcast(&self, _message: Vec<u8>, _broadcast_settings: Self::BroadcastSettings) {}
-}
-
-pub struct TestNetworkBackend {
-    pubsub_sender: broadcast::Sender<()>,
-    chainsync_sender: broadcast::Sender<()>,
-}
-
-#[async_trait]
-impl<RuntimeServiceId> NetworkBackend<RuntimeServiceId> for TestNetworkBackend {
-    type Settings = ();
-    type Message = ();
-    type PubSubEvent = ();
-    type ChainSyncEvent = ();
-
-    fn new(_config: Self::Settings, _overwatch_handle: OverwatchHandle<RuntimeServiceId>) -> Self {
-        let (pubsub_sender, _) = broadcast::channel(CHANNEL_SIZE);
-        let (chainsync_sender, _) = broadcast::channel(CHANNEL_SIZE);
-        Self {
-            pubsub_sender,
-            chainsync_sender,
-        }
-    }
-
-    async fn process(&self, _msg: Self::Message) {}
-
-    async fn subscribe_to_pubsub(&mut self) -> BroadcastStream<Self::PubSubEvent> {
-        BroadcastStream::new(self.pubsub_sender.subscribe())
-    }
-
-    async fn subscribe_to_chainsync(&mut self) -> BroadcastStream<Self::ChainSyncEvent> {
-        BroadcastStream::new(self.chainsync_sender.subscribe())
     }
 }
 

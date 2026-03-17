@@ -1,4 +1,7 @@
-use crate::edge::{BlendService, backends::BlendBackend};
+use crate::{
+    edge::{BlendService, backends::BlendBackend},
+    network::NetworkAdapter,
+};
 
 /// Exposes associated types for external modules that depend on
 /// [`BlendService`], without requiring them to specify its generic parameters.
@@ -15,31 +18,32 @@ pub trait ServiceComponents {
 impl<
     Backend,
     NodeId,
-    BroadcastSettings,
     MembershipAdapter,
     ProofsGenerator,
     TimeBackend,
     ChainService,
     PolInfoProvider,
+    Network,
     RuntimeServiceId,
 > ServiceComponents
     for BlendService<
         Backend,
         NodeId,
-        BroadcastSettings,
         MembershipAdapter,
         ProofsGenerator,
         TimeBackend,
         ChainService,
         PolInfoProvider,
+        Network,
         RuntimeServiceId,
     >
 where
     Backend: BlendBackend<NodeId, RuntimeServiceId>,
+    Network: NetworkAdapter<RuntimeServiceId>,
     NodeId: Clone,
 {
     type BackendSettings = Backend::Settings;
-    type BroadcastSettings = BroadcastSettings;
+    type BroadcastSettings = Network::BroadcastSettings;
     type MembershipAdapter = MembershipAdapter;
     type ProofsGenerator = ProofsGenerator;
 }

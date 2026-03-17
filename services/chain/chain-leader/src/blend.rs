@@ -41,10 +41,25 @@ where
     <BlendService as ServiceData>::Message: Send,
     BlendService::BroadcastSettings: Clone + Sync,
 {
-    pub async fn publish_proposal(&self, proposal: Proposal) {
+    pub async fn blend_proposal(&self, proposal: Proposal) {
         if let Err((e, _)) = self
             .relay
             .send(ServiceMessage::Blend(NetworkMessage {
+                message: ChainNetworkMessage::to_bytes(&ChainNetworkMessage::Proposal(proposal))
+                    .expect("NetworkMessage should be able to be serialized")
+                    .to_vec(),
+                broadcast_settings: self.broadcast_settings.clone(),
+            }))
+            .await
+        {
+            error!(target: LOG_TARGET, "Failed to relay proposal to blend service: {e:?}");
+        }
+    }
+
+    pub async fn broadcast_proposal(&self, proposal: Proposal) {
+        if let Err((e, _)) = self
+            .relay
+            .send(ServiceMessage::Broadcast(NetworkMessage {
                 message: ChainNetworkMessage::to_bytes(&ChainNetworkMessage::Proposal(proposal))
                     .expect("NetworkMessage should be able to be serialized")
                     .to_vec(),

@@ -17,7 +17,7 @@ pub type BlendMembershipAdapter<RuntimeServiceId> =
 pub type BlendCoreService<RuntimeServiceId> = lb_blend_service::core::BlendService<
     lb_blend_service::core::backends::libp2p::Libp2pBlendBackend,
     PeerId,
-    lb_blend_service::core::network::libp2p::Libp2pAdapter<RuntimeServiceId>,
+    lb_blend_service::network::libp2p::Libp2pAdapter<RuntimeServiceId>,
     BlendMembershipAdapter<RuntimeServiceId>,
     SdpService<RuntimeServiceId>,
     RealCoreAndLeaderProofsGenerator<PreloadKMSBackendCorePoQGenerator<RuntimeServiceId>>,
@@ -28,16 +28,16 @@ pub type BlendCoreService<RuntimeServiceId> = lb_blend_service::core::BlendServi
     RuntimeServiceId,
 >;
 pub type BlendEdgeService<RuntimeServiceId> = lb_blend_service::edge::BlendService<
-        lb_blend_service::edge::backends::libp2p::Libp2pBlendBackend,
-        PeerId,
-        <lb_blend_service::core::network::libp2p::Libp2pAdapter<RuntimeServiceId> as lb_blend_service::core::network::NetworkAdapter<RuntimeServiceId>>::BroadcastSettings,
-        BlendMembershipAdapter<RuntimeServiceId>,
-        RealLeaderProofsGenerator,
-        NtpTimeBackend,
-        CryptarchiaService<RuntimeServiceId>,
-        PolInfoProvider,
-        RuntimeServiceId
-    >;
+    lb_blend_service::edge::backends::libp2p::Libp2pBlendBackend,
+    PeerId,
+    BlendMembershipAdapter<RuntimeServiceId>,
+    RealLeaderProofsGenerator,
+    NtpTimeBackend,
+    CryptarchiaService<RuntimeServiceId>,
+    PolInfoProvider,
+    lb_blend_service::network::libp2p::Libp2pAdapter<RuntimeServiceId>,
+    RuntimeServiceId,
+>;
 pub type BlendService<RuntimeServiceId> = lb_blend_service::BlendService<
     BlendCoreService<RuntimeServiceId>,
     BlendEdgeService<RuntimeServiceId>,

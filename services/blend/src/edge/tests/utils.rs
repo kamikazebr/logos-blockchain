@@ -29,11 +29,13 @@ use crate::{
     },
     epoch_info::EpochHandler,
     membership::MembershipInfo,
+    message::ServiceMessage,
     settings::{FIRST_STREAM_ITEM_READY_TIMEOUT, TimingSettings},
     test_utils::{
         crypto::mock_blend_proof,
         epoch::{OncePolStreamProvider, TestChainService},
         membership::key,
+        network::TestNetworkAdapter,
     },
 };
 
@@ -68,7 +70,7 @@ pub async fn spawn_run(
 ) -> (
     JoinHandle<Result<(), Error>>,
     mpsc::Sender<Membership<NodeId>>,
-    mpsc::Sender<Vec<u8>>,
+    mpsc::Sender<ServiceMessage<()>>,
     mpsc::Receiver<NodeId>,
 ) {
     let (session_sender, session_receiver) = mpsc::channel(1);
@@ -86,6 +88,7 @@ pub async fn spawn_run(
         .map(|membership| MembershipInfo::from_membership_and_session_number(membership, 1));
 
     let settings = settings(local_node, minimal_network_size, node_id_sender);
+    let overwatch_handle = overwatch_handle();
     let join_handle = tokio::spawn(async move {
         Box::pin(run::<
             TestBackend,
@@ -93,6 +96,7 @@ pub async fn spawn_run(
             MockLeaderProofsGenerator,
             _,
             OncePolStreamProvider,
+            _,
             _,
         >(
             UninitializedSessionEventStream::new(
@@ -107,7 +111,8 @@ pub async fn spawn_run(
             ReceiverStream::new(msg_receiver),
             EpochHandler::new(TestChainService, 1.try_into().unwrap()),
             settings,
-            &overwatch_handle(),
+            &overwatch_handle,
+            &TestNetworkAdapter,
             || {},
         ))
         .await

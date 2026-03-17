@@ -7,11 +7,9 @@ pub mod init;
 use cfg_if::cfg_if;
 use color_eyre::eyre::{Result, eyre};
 pub use lb_blend_service::{
-    core::{
-        backends::libp2p::Libp2pBlendBackend as BlendBackend,
-        network::libp2p::Libp2pAdapter as BlendNetworkAdapter,
-    },
+    core::backends::libp2p::Libp2pBlendBackend as BlendBackend,
     membership::service::Adapter as BlendMembershipAdapter,
+    network::libp2p::Libp2pAdapter as BlendNetworkAdapter,
 };
 pub use lb_core::{
     codec,

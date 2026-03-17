@@ -11,10 +11,7 @@ use overwatch::{
     services::{AsServiceId, ServiceData},
 };
 
-use crate::{
-    core::{network::NetworkAdapter, service_components::MessageComponents},
-    modes::Error,
-};
+use crate::{core::service_components::MessageComponents, modes::Error, network::NetworkAdapter};
 
 pub struct BroadcastMode<Adapter, RuntimeServiceId> {
     adapter: Adapter,
@@ -73,7 +70,7 @@ where
 #[cfg(test)]
 pub mod tests {
     use futures::StreamExt as _;
-    use lb_network_service::{NetworkService, backends::NetworkBackend, message::NetworkMsg};
+    use lb_network_service::{NetworkService, message::NetworkMsg};
     use overwatch::{
         DynError, OpaqueServiceResourcesHandle,
         overwatch::OverwatchRunner,
@@ -84,10 +81,10 @@ pub mod tests {
         },
     };
     use tokio::sync::mpsc;
-    use tokio_stream::wrappers::BroadcastStream;
     use tracing::{debug, info};
 
     use super::*;
+    use crate::test_utils::network::TestNetworkBackend;
 
     #[test_log::test(test)]
     fn broadcast_mode() {
@@ -190,30 +187,6 @@ pub mod tests {
             }
 
             Ok(())
-        }
-    }
-
-    pub struct TestNetworkBackend;
-
-    #[async_trait::async_trait]
-    impl<RuntimeServiceId> NetworkBackend<RuntimeServiceId> for TestNetworkBackend {
-        type Settings = ();
-        type Message = Vec<u8>;
-        type PubSubEvent = ();
-        type ChainSyncEvent = ();
-
-        fn new((): Self::Settings, _: OverwatchHandle<RuntimeServiceId>) -> Self {
-            Self
-        }
-
-        async fn process(&self, _: Self::Message) {}
-
-        async fn subscribe_to_pubsub(&mut self) -> BroadcastStream<Self::PubSubEvent> {
-            unimplemented!()
-        }
-
-        async fn subscribe_to_chainsync(&mut self) -> BroadcastStream<Self::ChainSyncEvent> {
-            unimplemented!()
         }
     }
 

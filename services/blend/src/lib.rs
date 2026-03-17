@@ -22,17 +22,15 @@ use overwatch::{
 use tracing::{error, info};
 
 use crate::{
-    core::{
-        network::NetworkAdapter as NetworkAdapterTrait,
-        service_components::{
-            BlendBackendSettingsOfService, MessageComponents, NetworkBackendOfService,
-            ServiceComponents as CoreServiceComponents,
-        },
+    core::service_components::{
+        BlendBackendSettingsOfService, MessageComponents, NetworkBackendOfService,
+        ServiceComponents as CoreServiceComponents,
     },
     edge::service_components::ServiceComponents as EdgeServiceComponents,
     instance::{Instance, Mode},
     kms::PreloadKmsService,
     membership::{Adapter as _, MembershipInfo},
+    network::NetworkAdapter as NetworkAdapterTrait,
     settings::{FIRST_STREAM_ITEM_READY_TIMEOUT, Settings},
 };
 
@@ -41,9 +39,11 @@ pub mod edge;
 pub mod epoch_info;
 pub mod membership;
 pub mod message;
-pub(crate) mod metrics;
+pub mod network;
 pub mod session;
 pub mod settings;
+
+pub(crate) mod metrics;
 
 mod instance;
 mod kms;

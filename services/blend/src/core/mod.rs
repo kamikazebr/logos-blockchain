@@ -65,7 +65,6 @@ use lb_services_utils::{
 };
 use lb_time_service::{SlotTick, TimeService, TimeServiceMessage};
 use lb_utils::blake_rng::BlakeRng;
-use network::NetworkAdapter;
 use overwatch::{
     OpaqueServiceResourcesHandle,
     overwatch::OverwatchHandle,
@@ -99,13 +98,13 @@ use crate::{
     kms::PreloadKmsService,
     membership::{self, MembershipInfo, ZkInfo},
     message::{NetworkMessage, ProcessedMessage, ServiceMessage},
+    network::NetworkAdapter,
     session::{CoreSessionInfo, CoreSessionPublicInfo, MaybeEmptyCoreSessionInfo},
     settings::FIRST_STREAM_ITEM_READY_TIMEOUT,
 };
 
 pub mod backends;
 pub mod kms;
-pub mod network;
 pub mod settings;
 
 pub(super) mod service_components;
@@ -881,13 +880,20 @@ where
 
     loop {
         tokio::select! {
-            Some(ServiceMessage::Blend(message_payload)) = inbound_relay.next() => {
-                // We serialize here, outside of the handler function, so that we can serialize only once for all replicas.
-                let serialized_data_message = NetworkMessage::<NetAdapter::BroadcastSettings>::to_bytes(&message_payload).expect("NetworkMessage should be able to be serialized");
+            Some(inbound_message) = inbound_relay.next() => {
+                match inbound_message {
+                    ServiceMessage::Blend(message_to_blend) => {
+                        // We serialize here, outside of the handler function, so that we can serialize only once for all replicas.
+                        let serialized_data_message = NetworkMessage::<NetAdapter::BroadcastSettings>::to_bytes(&message_to_blend).expect("NetworkMessage should be able to be serialized");
 
-                let message_copies = blend_config.data_replication_factor.checked_add(1).unwrap();
-                for _ in 0..message_copies {
-                    recovery_checkpoint = handle_serialized_local_data_message(&serialized_data_message, &mut crypto_processor, &mut message_scheduler, recovery_checkpoint).await;
+                        let message_copies = blend_config.data_replication_factor.checked_add(1).unwrap();
+                        for _ in 0..message_copies {
+                            recovery_checkpoint = handle_serialized_local_data_message(&serialized_data_message, &mut crypto_processor, &mut message_scheduler, recovery_checkpoint).await;
+                        }
+                    },
+                    ServiceMessage::Broadcast(message_to_blend) => {
+                        network_adapter.broadcast(message_to_blend.message, message_to_blend.broadcast_settings).await;
+                    },
                 }
             }
             Some(incoming_message) = blend_messages.next() => {

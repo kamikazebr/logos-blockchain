@@ -1,6 +1,6 @@
 use std::{path::PathBuf, sync::Arc};
 
-use lb_blend_service::core::network::libp2p::Libp2pBroadcastSettings;
+use lb_blend_service::network::libp2p::Libp2pBroadcastSettings;
 use lb_chain_network_service::network::adapters::libp2p::LibP2pAdapterSettings;
 use lb_core::sdp::ServiceParameters;
 use lb_cryptarchia_engine::EpochConfig;

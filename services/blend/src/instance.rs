@@ -12,14 +12,12 @@ use overwatch::{
 
 use crate::{
     BroadcastSettings,
-    core::{
-        network::NetworkAdapter as NetworkAdapterTrait,
-        service_components::{
-            MessageComponents, NetworkBackendOfService, ServiceComponents as CoreServiceComponents,
-        },
+    core::service_components::{
+        MessageComponents, NetworkBackendOfService, ServiceComponents as CoreServiceComponents,
     },
     membership::MembershipInfo,
     modes::{self, BroadcastMode, CoreMode, EdgeMode},
+    network::NetworkAdapter as NetworkAdapterTrait,
 };
 
 /// An instance that can operate in Core, Edge, or Broadcast mode,
@@ -317,7 +315,10 @@ mod tests {
     use tokio::time::sleep;
 
     use super::*;
-    use crate::modes::broadcast_tests::{TestMessage, TestNetworkAdapter, TestNetworkBackend};
+    use crate::{
+        modes::broadcast_tests::{TestMessage, TestNetworkAdapter},
+        test_utils::network::TestNetworkBackend,
+    };
 
     /// Check if the instance is initialized successfully for each mode.
     #[test]

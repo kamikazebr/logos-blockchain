@@ -26,9 +26,9 @@ use crate::{
         state::ServiceState,
         tests::utils::{
             MockKmsAdapter, MockProofsVerifier, NodeId, TestBlendBackend, TestBlendBackendEvent,
-            TestNetworkAdapter, dummy_overwatch_resources, new_crypto_processor, new_membership,
-            new_public_info, new_stream, reward_session_info, scheduler_session_info,
-            scheduler_settings, sdp_relay, settings, timing_settings, wait_for_blend_backend_event,
+            dummy_overwatch_resources, new_crypto_processor, new_membership, new_public_info,
+            new_stream, reward_session_info, scheduler_session_info, scheduler_settings, sdp_relay,
+            settings, timing_settings, wait_for_blend_backend_event,
         },
     },
     epoch_info::EpochHandler,
@@ -38,6 +38,7 @@ use crate::{
     test_utils::{
         crypto::MockCoreAndLeaderProofsGenerator,
         epoch::{OncePolStreamProvider, TestChainService},
+        network::TestNetworkAdapter,
     },
 };
 
