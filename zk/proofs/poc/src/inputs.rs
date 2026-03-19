@@ -1,4 +1,4 @@
-use groth16::{Fr, Groth16Input, Groth16InputDeser};
+use lb_groth16::{Fr, Groth16Input, Groth16InputDeser};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -24,6 +24,31 @@ impl PoCWitnessInputs {
         Self {
             wallet: wallet.into(),
             chain: chain.into(),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct PoCWitnessInputsData {
+    pub wallet: PoCWalletInputsData,
+    pub chain: PoCChainInputsData,
+}
+
+impl PoCWitnessInputsData {
+    #[must_use]
+    pub const fn from_chain_and_wallet_data(
+        chain: PoCChainInputsData,
+        wallet: PoCWalletInputsData,
+    ) -> Self {
+        Self { wallet, chain }
+    }
+}
+
+impl From<PoCWitnessInputsData> for PoCWitnessInputs {
+    fn from(PoCWitnessInputsData { chain, wallet }: PoCWitnessInputsData) -> Self {
+        Self {
+            chain: chain.into(),
+            wallet: wallet.into(),
         }
     }
 }
@@ -61,7 +86,7 @@ pub struct PoCVerifierInputJson([Groth16InputDeser; 3]);
 /// This inputs are the ones that need to be fed into the verifier.
 #[derive(Clone)]
 pub struct PoCVerifierInput {
-    voucher_nullifier: Groth16Input,
+    pub voucher_nullifier: Groth16Input,
     voucher_root: Groth16Input,
     mantle_tx_hash: Groth16Input,
 }
@@ -87,5 +112,14 @@ impl PoCVerifierInput {
             self.voucher_root.into_inner(),
             self.mantle_tx_hash.into_inner(),
         ]
+    }
+
+    #[must_use]
+    pub fn new(voucher_nullifier: Fr, voucher_root: Fr, mantle_tx_hash: Fr) -> Self {
+        Self {
+            voucher_nullifier: voucher_nullifier.into(),
+            voucher_root: voucher_root.into(),
+            mantle_tx_hash: mantle_tx_hash.into(),
+        }
     }
 }

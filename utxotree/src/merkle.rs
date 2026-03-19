@@ -5,24 +5,26 @@ use std::{
 
 use ark_ff::Field;
 #[cfg(feature = "serde")]
-use groth16::serde::serde_fr;
-use poseidon2::{Digest, Fr};
+use lb_groth16::serde::serde_fr;
+use lb_poseidon2::{Digest, Fr};
 use rpds::RedBlackTreeSetSync;
 
 use crate::CompressedUtxoTree;
 
+const TREE_HEIGHT_EXCEPT_ROOT: usize = 32;
+
 const EMPTY_VALUE: Fr = <Fr as Field>::ZERO;
 
 fn empty_subtree_root<Hash: Digest>(height: usize) -> Fr {
-    static PRECOMPUTED_EMPTY_ROOTS: OnceLock<[Fr; 32]> = OnceLock::new();
-    assert!(height < 32, "Height must be less than 32: {height}");
+    static PRECOMPUTED_EMPTY_ROOTS: OnceLock<[Fr; TREE_HEIGHT_EXCEPT_ROOT + 1]> = OnceLock::new();
+    assert!(
+        height <= TREE_HEIGHT_EXCEPT_ROOT,
+        "Height{height} must be <={TREE_HEIGHT_EXCEPT_ROOT}"
+    );
     PRECOMPUTED_EMPTY_ROOTS.get_or_init(|| {
-        let mut hashes = [EMPTY_VALUE; 32];
-        for i in 1..32 {
-            let mut hasher = Hash::new();
-            hasher.update(&hashes[i - 1]);
-            hasher.update(&hashes[i - 1]);
-            hashes[i] = hasher.finalize();
+        let mut hashes = [EMPTY_VALUE; TREE_HEIGHT_EXCEPT_ROOT + 1];
+        for i in 1..=TREE_HEIGHT_EXCEPT_ROOT {
+            hashes[i] = Hash::compress(&[hashes[i - 1], hashes[i - 1]]);
         }
         hashes
     })[height]
@@ -32,8 +34,8 @@ fn empty_subtree_root<Hash: Digest>(height: usize) -> Fr {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Node<Item> {
     Inner {
-        left: Arc<Node<Item>>,
-        right: Arc<Node<Item>>,
+        left: Arc<Self>,
+        right: Arc<Self>,
         #[cfg_attr(feature = "serde", serde(with = "serde_fr"))]
         value: Fr,
         right_subtree_size: usize,
@@ -53,24 +55,24 @@ enum Node<Item> {
 }
 
 fn hash<Item: AsRef<Fr>, Hash: Digest>(left: &Node<Item>, right: &Node<Item>) -> Fr {
-    let mut hasher = Hash::new();
+    let mut input = [EMPTY_VALUE; 2];
     match left {
-        Node::Inner { value, .. } => hasher.update(value),
+        Node::Inner { value, .. } => input[0] = *value,
         Node::Leaf { item } => {
-            hasher.update(item.as_ref().map_or(&EMPTY_VALUE, AsRef::as_ref));
+            input[0] = *item.as_ref().map_or(&EMPTY_VALUE, AsRef::as_ref);
         }
         Node::Empty { .. } => panic!("Empty node in left subtree is not allowed"),
     }
     match right {
-        Node::Inner { value, .. } => hasher.update(value),
+        Node::Inner { value, .. } => input[1] = *value,
         Node::Leaf { item } => {
-            hasher.update(item.as_ref().map_or(&EMPTY_VALUE, AsRef::as_ref));
+            input[1] = *item.as_ref().map_or(&EMPTY_VALUE, AsRef::as_ref);
         }
         Node::Empty { height } => {
-            hasher.update(&empty_subtree_root::<Hash>(*height));
+            input[1] = empty_subtree_root::<Hash>(*height);
         }
     }
-    hasher.finalize()
+    Hash::compress(&input)
 }
 
 impl<Item> Node<Item> {
@@ -191,14 +193,63 @@ impl<Item: AsRef<Fr>> Node<Item> {
             _ => panic!("Cannot remove from a empty / non-leaf node"),
         })
     }
+
+    /// Computes the Merkle path for the item at the given index.
+    /// The path is ordered from leaf to root (excluded).
+    /// Returns `None` if the index does not exist or has been removed.
+    fn path<Hash>(self: &Arc<Self>, index: usize) -> Option<MerklePath<Fr>>
+    where
+        Hash: Digest,
+    {
+        match self.as_ref() {
+            Self::Inner { left, right, .. } => {
+                assert!(
+                    index < self.capacity(),
+                    "Index {} out of bounds for node with height {}",
+                    index,
+                    self.height()
+                );
+
+                if index < left.capacity() {
+                    // Going down left subtree, store right sibling hash
+                    let mut path = left.path::<Hash>(index)?;
+                    assert!(path.len() < TREE_HEIGHT_EXCEPT_ROOT, "Path length exceeded");
+                    path.push(MerkleNode::Right(right.value::<Hash>()));
+                    Some(path)
+                } else {
+                    // Going down right subtree, store left sibling hash
+                    let mut path = right.path::<Hash>(index - left.capacity())?;
+                    assert!(path.len() < TREE_HEIGHT_EXCEPT_ROOT, "Path length exceeded");
+                    path.push(MerkleNode::Left(left.value::<Hash>()));
+                    Some(path)
+                }
+            }
+            Self::Leaf { item: Some(_) } => Some(MerklePath::new()),
+            Self::Leaf { item: None } | Self::Empty { .. } => None,
+        }
+    }
+
+    fn value<Hash>(&self) -> Fr
+    where
+        Hash: Digest,
+    {
+        match self {
+            Self::Inner { value, .. } => *value,
+            Self::Leaf { item: Some(item) } => *item.as_ref(),
+            Self::Leaf { item: None } => EMPTY_VALUE,
+            Self::Empty { height } => empty_subtree_root::<Hash>(*height),
+        }
+    }
 }
 
 /// A dynamic persistent Merkle tree that supports insertion and removal of
-/// items. Removed items are replaced with an empty leaf node, which prevents
+/// items.
+///
+/// Removed items are replaced with an empty leaf node, which prevents
 /// the whole tree reordering and their position is recorded for future
 /// insertions. Compared to a MPT, the height of this tree is predictable and
 /// bounded by the number of items, allowing for efficient and simple proof of
-/// memberships for Proof of Leadership.
+/// memberships for `PoL`.
 #[derive(Debug, Clone)]
 pub struct DynamicMerkleTree<Item, Hash> {
     root: Arc<Node<Item>>,
@@ -206,21 +257,31 @@ pub struct DynamicMerkleTree<Item, Hash> {
     _hash: PhantomData<Hash>,
 }
 
-impl<Item: AsRef<Fr>, Hash: Digest> DynamicMerkleTree<Item, Hash> {
-    pub fn new() -> Self {
+impl<Item: AsRef<Fr>, Hash: Digest> Default for DynamicMerkleTree<Item, Hash> {
+    fn default() -> Self {
         let holes = RedBlackTreeSetSync::new_sync();
         Self {
-            root: Arc::new(Node::Empty { height: 31 }),
+            root: Arc::new(Node::Empty {
+                height: TREE_HEIGHT_EXCEPT_ROOT,
+            }),
             holes,
             _hash: PhantomData,
         }
     }
+}
 
+impl<Item: AsRef<Fr>, Hash: Digest> DynamicMerkleTree<Item, Hash> {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    #[must_use]
     pub fn size(&self) -> usize {
         self.root.size()
     }
 
-    pub(crate) fn insert(&self, item: Item) -> (Self, usize) {
+    pub fn insert(&self, item: Item) -> (Self, usize) {
         assert!(
             self.size() < self.root.capacity(),
             "max capacity reached, cannot insert more items"
@@ -254,6 +315,7 @@ impl<Item: AsRef<Fr>, Hash: Digest> DynamicMerkleTree<Item, Hash> {
         }
     }
 
+    #[must_use]
     pub fn root(&self) -> Fr {
         match self.root.as_ref() {
             Node::Inner { value, .. } => *value,
@@ -262,6 +324,21 @@ impl<Item: AsRef<Fr>, Hash: Digest> DynamicMerkleTree<Item, Hash> {
             }
             Node::Empty { .. } => empty_subtree_root::<Hash>(self.root.height()),
         }
+    }
+
+    /// Computes the Merkle path for the item at the given index.
+    /// The path is ordered from leaf to root (excluded).
+    /// Returns `None` if the index does not exist or has been removed.
+    #[must_use]
+    pub fn path(&self, index: usize) -> Option<MerklePath<Fr>> {
+        self.root.path::<Hash>(index).inspect(|path| {
+            assert_eq!(
+                path.len(),
+                TREE_HEIGHT_EXCEPT_ROOT,
+                "Path length({}) must be {TREE_HEIGHT_EXCEPT_ROOT}",
+                path.len()
+            );
+        })
     }
 
     // This is only for maintaining holes information when recovering
@@ -375,18 +452,42 @@ pub mod serde {
     }
 }
 
+/// A merkle path node indicating whether the sibling is on left or right.
+#[derive(Clone)]
+pub enum MerkleNode<T> {
+    /// The value of sibling which is the left child.
+    Left(T),
+    /// The value of sibling which is the right child.
+    Right(T),
+}
+
+impl<T> MerkleNode<T> {
+    pub const fn item(&self) -> &T {
+        match self {
+            Self::Left(v) | Self::Right(v) => v,
+        }
+    }
+}
+
+/// A Merkle path consisting of sibling nodes from leaf to root (excluded).
+pub type MerklePath<T> = Vec<MerkleNode<T>>;
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_fr::TestFr;
 
-    type TestHash = poseidon2::Poseidon2Bn254Hasher;
+    type TestHash = lb_poseidon2::Poseidon2Bn254Hasher;
 
     #[test]
     fn test_empty_tree() {
         let tree: DynamicMerkleTree<TestFr, TestHash> = DynamicMerkleTree::new();
         assert_eq!(tree.size(), 0);
-        assert_eq!(tree.root(), empty_subtree_root::<TestHash>(31));
+        assert_eq!(
+            tree.root(),
+            empty_subtree_root::<TestHash>(TREE_HEIGHT_EXCEPT_ROOT)
+        );
+        assert_eq!(tree.root.height(), TREE_HEIGHT_EXCEPT_ROOT);
     }
 
     #[test]
@@ -559,5 +660,97 @@ mod tests {
         // Final insertion should use the last hole (position 4)
         let (_, index3) = tree.insert(TestFr::from_rng(&mut rand::rng()));
         assert_eq!(index3, 4, "Should select remaining hole");
+    }
+
+    #[test]
+    fn test_path_empty_tree() {
+        let tree = DynamicMerkleTree::<TestFr, TestHash>::new();
+
+        // Getting a path from an empty tree should return None
+        assert!(tree.path(0).is_none());
+    }
+
+    #[test]
+    fn test_path_single_item() {
+        let tree = DynamicMerkleTree::<TestFr, TestHash>::new();
+        let item = TestFr::from_usize(0);
+        let (tree, idx) = tree.insert(item);
+
+        let path = tree.path(idx).unwrap();
+        assert_eq!(path.len(), TREE_HEIGHT_EXCEPT_ROOT);
+
+        // Verify the path can reconstruct the root
+        verify_path(item, &path, tree.root());
+
+        // For a single item at index 0, we go down the left subtree at every level
+        // So all siblings should be Right nodes with empty subtree hashes
+        for (height, node) in path.iter().enumerate() {
+            assert!(matches!(node, MerkleNode::Right(_)));
+            let sibling_hash = empty_subtree_root::<TestHash>(height);
+            assert_eq!(*node.item(), sibling_hash);
+        }
+    }
+
+    #[test]
+    fn test_path_removed_item() {
+        let tree = DynamicMerkleTree::<TestFr, TestHash>::new();
+        let (tree, idx) = tree.insert(TestFr::from_usize(0));
+
+        // Path should exist before removal
+        assert!(tree.path(idx).is_some());
+
+        // Remove the item
+        let tree = tree.remove(idx);
+        // Path should return None after removal
+        assert!(tree.path(idx).is_none());
+    }
+
+    #[test]
+    fn test_path_multiple_items() {
+        let tree = DynamicMerkleTree::<TestFr, TestHash>::new();
+        let item0 = TestFr::from_usize(0);
+        let item1 = TestFr::from_usize(1);
+        let item2 = TestFr::from_usize(2);
+        let (tree, idx0) = tree.insert(item0);
+        let (tree, idx1) = tree.insert(item1);
+        let (tree, idx2) = tree.insert(item2);
+
+        // Test path for idx0 (leftmost item)
+        let path0 = tree.path(idx0).unwrap();
+        assert_eq!(path0.len(), TREE_HEIGHT_EXCEPT_ROOT);
+        verify_path(item0, &path0, tree.root());
+
+        // Test path for idx1 (second item, right sibling of idx0 at the leaf level)
+        let path1 = tree.path(idx1).unwrap();
+        assert_eq!(path1.len(), TREE_HEIGHT_EXCEPT_ROOT);
+        verify_path(item1, &path1, tree.root());
+        // For idx1, the first sibling (at leaf level) should be idx0 (left sibling)
+        assert!(matches!(path1.first().unwrap(), MerkleNode::Left(_)));
+        assert_eq!(*path1.first().unwrap().item(), *item0.as_ref());
+
+        // Test path for idx2 (third item)
+        let path2 = tree.path(idx2).unwrap();
+        assert_eq!(path2.len(), TREE_HEIGHT_EXCEPT_ROOT);
+        verify_path(item2, &path2, tree.root());
+    }
+
+    /// Verifies a Merkle path by recomputing the root hash from the leaf value
+    /// and path. The path is expected to be ordered from leaf to root.
+    fn verify_path(item: TestFr, path: &MerklePath<Fr>, expected_root: Fr) {
+        let mut current_hash = *item.as_ref();
+        for node in path {
+            current_hash = match node {
+                MerkleNode::Left(sibling) => {
+                    <TestHash as Digest>::compress(&[*sibling, current_hash])
+                }
+                MerkleNode::Right(sibling) => {
+                    <TestHash as Digest>::compress(&[current_hash, *sibling])
+                }
+            };
+        }
+        assert_eq!(
+            current_hash, expected_root,
+            "Computed root from path doesn't match expected root"
+        );
     }
 }

@@ -1,22 +1,20 @@
-use common_http_client::CommonHttpClient;
-use nomos_core::{
-    mantle::{MantleTx, SignedMantleTx, Transaction as _, ledger::Tx as LedgerTx},
-    proofs::zksig::{DummyZkSignature, ZkSignaturePublic},
-};
+use lb_common_http_client::CommonHttpClient;
+use lb_core::mantle::{MantleTx, SignedMantleTx, Transaction as _, ledger::Tx as LedgerTx};
+use lb_key_management_system_service::keys::ZkKey;
+use logos_blockchain_tests::topology::{Topology, TopologyConfig};
 use reqwest::Url;
 use serial_test::serial;
-use tests::topology::{Topology, TopologyConfig};
 
 #[tokio::test]
 #[serial]
 async fn test_post_mantle_tx() {
-    let topology = Topology::spawn(TopologyConfig::validator_and_executor()).await;
+    let topology = Topology::spawn(TopologyConfig::two_validators()).await;
     let validator = &topology.validators()[0];
 
     let validator_url = Url::parse(
         format!(
             "http://{}",
-            validator.config().http.backend_settings.address
+            validator.config().user.api.backend.listen_address
         )
         .as_str(),
     )
@@ -31,10 +29,7 @@ async fn test_post_mantle_tx() {
 
     let signed_tx = SignedMantleTx {
         ops_proofs: Vec::new(),
-        ledger_tx_proof: DummyZkSignature::prove(ZkSignaturePublic {
-            msg_hash: mantle_tx.hash().into(),
-            pks: vec![],
-        }),
+        ledger_tx_proof: ZkKey::multi_sign(&[], mantle_tx.hash().as_ref()).unwrap(),
         mantle_tx,
     };
 

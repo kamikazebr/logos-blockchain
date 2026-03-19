@@ -8,7 +8,10 @@ pub mod config;
 pub mod time;
 
 use core::{fmt::Debug, hash::Hash};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::{
+    collections::{BTreeMap, HashMap, HashSet},
+    num::NonZero,
+};
 
 pub use config::*;
 use thiserror::Error;
@@ -34,18 +37,21 @@ impl State {
         matches!(self, Self::Online)
     }
 
-    fn fork_choice<Id>(cryptarchia: &Cryptarchia<Id>) -> Branch<Id>
+    /// Runs the fork choice rule to select the new local chain.
+    /// Returns the new local chain and the lowest common ancestor with the
+    /// previous.
+    fn fork_choice<Id>(cryptarchia: &Cryptarchia<Id>) -> (Branch<Id>, Branch<Id>)
     where
         Id: Eq + Hash + Copy,
     {
         match cryptarchia.state {
             Self::Bootstrapping => {
-                let k = cryptarchia.config.security_param.get().into();
-                let s = cryptarchia.config.s();
-                maxvalid_bg(cryptarchia.local_chain, &cryptarchia.branches, k, s)
+                let k = cryptarchia.config.security_param().get().into();
+                let s_gen = cryptarchia.config.s_gen();
+                maxvalid_bg(cryptarchia.local_chain, &cryptarchia.branches, k, s_gen)
             }
             Self::Online => {
-                let k = cryptarchia.config.security_param.get().into();
+                let k = cryptarchia.config.security_param().get().into();
                 maxvalid_mc(cryptarchia.local_chain, &cryptarchia.branches, k)
             }
         }
@@ -61,22 +67,32 @@ impl State {
                 .branches
                 .nth_ancestor(
                     &cryptarchia.local_chain,
-                    cryptarchia.config.security_param.get().into(),
+                    cryptarchia.config.security_param().get().into(),
                 )
                 .id(),
         }
     }
 }
 
-// Implementation of the fork choice rule as defined in the Ouroboros Genesis
-// paper k defines the forking depth of chain we accept without more
-// analysis s defines the length of time (unit of slots) after the fork
-// happened we will inspect for chain density
-fn maxvalid_bg<Id>(local_chain: Branch<Id>, branches: &Branches<Id>, k: u64, s: u64) -> Branch<Id>
+/// Implementation of the fork choice rule as defined in the Ouroboros Genesis
+/// paper k defines the forking depth of chain we accept without more
+/// analysis s defines the length of time (unit of slots) after the fork
+/// happened we will inspect for chain density
+///
+/// It returns the new local chain and the lowest common ancestor with the
+/// previous.
+fn maxvalid_bg<Id>(
+    local_chain: Branch<Id>,
+    branches: &Branches<Id>,
+    k: u64,
+    s_gen: NonZero<u64>,
+) -> (Branch<Id>, Branch<Id>)
 where
     Id: Eq + Hash + Copy,
 {
     let mut cmax = local_chain;
+    let mut lowest_common_ancestor_with_cmax = local_chain;
+
     let forks = branches.branches();
     for chain in forks {
         let lowest_common_ancestor = branches.lca(&cmax, &chain);
@@ -85,28 +101,39 @@ where
             // Classic longest chain rule with parameter k
             if cmax.length < chain.length {
                 cmax = chain;
+                lowest_common_ancestor_with_cmax = lowest_common_ancestor;
             }
         } else {
             // The chain is forking too much, we need to pay a bit more attention
             // In particular, select the chain that is the densest after the fork
-            let density_slot = Slot::from(u64::from(lowest_common_ancestor.slot) + s);
+            let density_slot = Slot::from(u64::from(lowest_common_ancestor.slot) + s_gen.get());
             let cmax_density = branches.walk_back_before(&cmax, density_slot).length;
             let candidate_density = branches.walk_back_before(&chain, density_slot).length;
             if cmax_density < candidate_density {
                 cmax = chain;
+                lowest_common_ancestor_with_cmax = lowest_common_ancestor;
             }
         }
     }
-    cmax
+    (cmax, lowest_common_ancestor_with_cmax)
 }
 
-// Implementation of the fork choice rule as defined in the Ouroboros Praos
-// paper k defines the forking depth of chain we can accept
-fn maxvalid_mc<Id>(local_chain: Branch<Id>, branches: &Branches<Id>, k: u64) -> Branch<Id>
+/// Implementation of the fork choice rule as defined in the Ouroboros Praos
+/// paper k defines the forking depth of chain we can accept.
+///
+/// It returns the new local chain and the lowest common ancestor with the
+/// previous.
+fn maxvalid_mc<Id>(
+    local_chain: Branch<Id>,
+    branches: &Branches<Id>,
+    k: u64,
+) -> (Branch<Id>, Branch<Id>)
 where
     Id: Eq + Hash + Copy,
 {
     let mut cmax = local_chain;
+    let mut lowest_common_ancestor_with_cmax = local_chain;
+
     let forks = branches.branches();
     for chain in forks {
         let lowest_common_ancestor = branches.lca(&cmax, &chain);
@@ -114,9 +141,10 @@ where
         if m <= k && cmax.length < chain.length {
             // Classic longest chain rule with parameter k
             cmax = chain;
+            lowest_common_ancestor_with_cmax = lowest_common_ancestor;
         }
     }
-    cmax
+    (cmax, lowest_common_ancestor_with_cmax)
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -175,15 +203,15 @@ impl<Id> Branches<Id>
 where
     Id: Eq + Hash + Copy,
 {
-    pub fn from_lib(lib: Id) -> Self {
+    pub fn from_lib(lib: Id, slot: Slot, length: u64) -> Self {
         let mut branches = HashMap::new();
         branches.insert(
             lib,
             Branch {
                 id: lib,
                 parent: lib,
-                slot: 0.into(),
-                length: 0,
+                slot,
+                length,
             },
         );
         let tips = HashSet::from([lib]);
@@ -238,7 +266,7 @@ where
         self.tips.iter().map(|id| self.branches[id])
     }
 
-    // find the lowest common ancestor of two branches
+    /// find the lowest common ancestor of two branches
     pub fn lca<'a>(&'a self, mut b1: &'a Branch<Id>, mut b2: &'a Branch<Id>) -> Branch<Id> {
         // first reduce branches to the same length
         while b1.length > b2.length {
@@ -266,7 +294,7 @@ where
         self.get(header_id).map(|branch| branch.length)
     }
 
-    // Walk back the chain until the target slot
+    /// Walk back the chain until the target slot
     fn walk_back_before(&self, branch: &Branch<Id>, slot: Slot) -> Branch<Id> {
         let mut current = branch;
         while current.slot > slot {
@@ -275,8 +303,27 @@ where
         *current
     }
 
-    // Returns the min(n, A)-th ancestor of the provided block, where A is the
-    // number of ancestors of this block.
+    /// Walk back the chain and return all blocks in the range
+    /// `[branch.id, target_exclusive)`.
+    fn walk_back_to_block<'s>(
+        &'s self,
+        branch: &'s Branch<Id>,
+        target_exclusive: Id,
+    ) -> impl Iterator<Item = Id> + 's {
+        let mut current = branch.id;
+        std::iter::from_fn(move || {
+            if current == target_exclusive {
+                None
+            } else {
+                let branch = &self.branches[&current];
+                current = branch.parent;
+                Some(branch.id)
+            }
+        })
+    }
+
+    /// Returns the min(n, A)-th ancestor of the provided block, where A is the
+    /// number of ancestors of this block.
     fn nth_ancestor(&self, branch: &Branch<Id>, mut n: u64) -> Branch<Id> {
         let mut current = branch;
         while n > 0 {
@@ -316,14 +363,14 @@ impl<Id> Cryptarchia<Id>
 where
     Id: Eq + Hash + Copy + Debug,
 {
-    pub fn from_lib(id: Id, config: Config, state: State) -> Self {
+    pub fn from_lib(id: Id, config: Config, state: State, slot: Slot, length: u64) -> Self {
         Self {
-            branches: Branches::from_lib(id),
+            branches: Branches::from_lib(id, slot, length),
             local_chain: Branch {
                 id,
-                length: 0,
+                length,
                 parent: id,
-                slot: 0.into(),
+                slot,
             },
             config,
             state,
@@ -332,22 +379,35 @@ where
 
     /// Create a new [`Cryptarchia`] instance with the updated state
     /// after applying the given block.
-    ///
-    /// Also returns [`PrunedBlocks`] if the LIB is updated and forks
-    /// that diverged before the new LIB are pruned.
-    /// Otherwise, an empty [`PrunedBlocks`] is returned.
     #[must_use = "Returns a new instance with the updated state, without modifying the original."]
     pub fn receive_block(
         &self,
         id: Id,
         parent: Id,
         slot: Slot,
-    ) -> Result<(Self, PrunedBlocks<Id>), Error<Id>> {
+    ) -> Result<UpdatedCryptarchia<Id>, Error<Id>> {
         let mut new: Self = self.clone();
         new.branches = new.branches.apply_header(id, parent, slot)?;
-        new.local_chain = new.fork_choice();
+        let (new_local_chain, lca) = new.fork_choice();
+        new.local_chain = new_local_chain;
         let pruned_blocks = new.update_lib();
-        Ok((new, pruned_blocks))
+
+        // On reorg, collect the reorged blocks in the old local chain.
+        let reorged_blocks = if new.local_chain.id == self.local_chain.id {
+            ReorgedBlocks::new()
+        } else {
+            ReorgedBlocks(
+                self.branches
+                    .walk_back_to_block(&self.local_chain, lca.id())
+                    .collect(),
+            )
+        };
+
+        Ok(UpdatedCryptarchia {
+            cryptarchia: new,
+            pruned_blocks,
+            reorged_blocks,
+        })
     }
 
     /// Attempts to update the LIB.
@@ -374,7 +434,10 @@ where
         }
     }
 
-    pub fn fork_choice(&self) -> Branch<Id> {
+    /// Runs the fork choice rule to select the new local chain.
+    /// Returns the new local chain and the lowest common ancestor with the
+    /// previous.
+    pub fn fork_choice(&self) -> (Branch<Id>, Branch<Id>) {
         State::fork_choice(self)
     }
 
@@ -481,6 +544,7 @@ where
             })
         })
     }
+
     pub const fn branches(&self) -> &Branches<Id> {
         &self.branches
     }
@@ -518,6 +582,20 @@ where
         let pruned_blocks = new.update_lib();
         (new, pruned_blocks)
     }
+
+    pub const fn config(&self) -> &Config {
+        &self.config
+    }
+}
+
+/// The output of applying a new block to [`Cryptarchia`]
+pub struct UpdatedCryptarchia<Id: Eq + Hash> {
+    /// The updated Cryptarchia instance.
+    pub cryptarchia: Cryptarchia<Id>,
+    /// Blocks in the forks pruned due to LIB update.
+    pub pruned_blocks: PrunedBlocks<Id>,
+    /// Blocks part of the previous local chain, on reorg.
+    pub reorged_blocks: ReorgedBlocks<Id>,
 }
 
 /// Represents blocks that have been pruned because they are no longer needed
@@ -586,6 +664,38 @@ where
     }
 }
 
+pub struct ReorgedBlocks<Id>(Vec<Id>);
+
+impl<Id> ReorgedBlocks<Id> {
+    #[must_use]
+    const fn new() -> Self {
+        Self(vec![])
+    }
+
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn iter(&self) -> std::slice::Iter<'_, Id> {
+        <&Self as IntoIterator>::into_iter(self)
+    }
+}
+
+impl<'a, Id> IntoIterator for &'a ReorgedBlocks<Id> {
+    type Item = &'a Id;
+    type IntoIter = std::slice::Iter<'a, Id>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+
 #[cfg(test)]
 pub mod tests {
     use std::{
@@ -593,20 +703,23 @@ pub mod tests {
         num::NonZero,
     };
 
+    use lb_utils::math::NonNegativeRatio;
+
     use super::{Cryptarchia, Error, Slot, maxvalid_bg};
-    use crate::{Config, State};
+    use crate::{Config, ReorgedBlocks, State, UpdatedCryptarchia};
 
     #[must_use]
-    pub const fn config() -> Config {
+    pub fn config() -> Config {
         config_with(1)
     }
 
     #[must_use]
-    pub const fn config_with(security_param: u32) -> Config {
-        Config {
-            security_param: NonZero::new(security_param).unwrap(),
-            active_slot_coeff: 1.0,
-        }
+    pub fn config_with(security_param: u32) -> Config {
+        Config::new(
+            NonZero::new(security_param).unwrap(),
+            NonNegativeRatio::new(1, 10.try_into().unwrap()),
+            1f64.try_into().expect("1 > 0"),
+        )
     }
 
     fn hash<T: Hash>(t: &T) -> [u8; 32] {
@@ -625,15 +738,28 @@ pub mod tests {
     /// index, so for a chain of length 10, the sequence of block IDs will be
     /// `[0, hash(1), hash(2), ..., hash(9)]`.
     fn create_canonical_chain(length: NonZero<u64>, c: Option<Config>) -> Cryptarchia<[u8; 32]> {
-        let mut engine =
-            Cryptarchia::from_lib(hash(&0u64), c.unwrap_or_else(config), State::Bootstrapping);
+        let mut engine = Cryptarchia::from_lib(
+            hash(&0u64),
+            c.unwrap_or_else(config),
+            State::Bootstrapping,
+            0.into(),
+            0,
+        );
         let mut parent = engine.lib();
         for i in 1..length.get() {
             let new_block = hash(&i);
-            engine = engine
+            let UpdatedCryptarchia {
+                cryptarchia,
+                reorged_blocks,
+                ..
+            } = engine
                 .receive_block(new_block, parent, i.into())
-                .expect("test block to be applied successfully.")
-                .0;
+                .expect("test block to be applied successfully.");
+            assert!(
+                reorged_blocks.is_empty(),
+                "no reorgs should happen in a canonical chain"
+            );
+            engine = cryptarchia;
             parent = new_block;
         }
         engine
@@ -644,7 +770,7 @@ pub mod tests {
         // parent
         // └── child
 
-        let mut branches = super::Branches::from_lib(hash(&0u64));
+        let mut branches = super::Branches::from_lib(hash(&0u64), 0.into(), 0);
         let parent = hash(&1u64);
         let child = hash(&2u64);
 
@@ -685,54 +811,66 @@ pub mod tests {
 
     #[test]
     fn test_fork_choice() {
-        // TODO: use cryptarchia
-        let mut engine = <Cryptarchia<_>>::from_lib(hash(&0u64), config(), State::Bootstrapping);
         // by setting a low k we trigger the density choice rule, and the shorter chain
         // is denser after the fork
-        engine.config.security_param = NonZero::new(10).unwrap();
+        let config = config_with(10);
+        let s_gen = config.s_gen().get();
+        let initial_height = 49;
+        let orig_engine =
+            create_canonical_chain((initial_height + 1).try_into().unwrap(), Some(config));
 
-        let mut parent = engine.lib();
-        for i in 1..50 {
-            let new_block = hash(&i);
-            engine = engine.receive_block(new_block, parent, i.into()).unwrap().0;
-            parent = new_block;
+        let mut engine = orig_engine.clone();
+        let mut long_p = engine.tip();
+        let mut short_p = engine.tip();
+        // the node sees first the short chain.
+        for slot in initial_height..(initial_height + s_gen) {
+            // build chain not too dense because we'll build a denser chain later
+            if slot % 2 == 0 {
+                let new_block = hash(&format!("short-{slot}"));
+                let UpdatedCryptarchia {
+                    cryptarchia,
+                    reorged_blocks,
+                    ..
+                } = engine
+                    .receive_block(new_block, short_p, slot.into())
+                    .unwrap();
+                assert!(reorged_blocks.is_empty());
+                engine = cryptarchia;
+                short_p = new_block;
+            }
         }
-        assert_eq!(engine.tip(), parent);
-
-        let mut long_p = parent;
-        let mut short_p = parent;
-        // the node sees first the short chain
-        for slot in 50..70 {
-            let new_block = hash(&format!("short-{slot}"));
-            engine = engine
-                .receive_block(new_block, short_p, slot.into())
-                .unwrap()
-                .0;
-            short_p = new_block;
-        }
-
         assert_eq!(engine.tip(), short_p);
 
         // then it receives a longer chain which is however less dense after the fork
-        for slot in 50..70 {
-            if slot % 2 == 0 {
+        for slot in initial_height..(initial_height + s_gen) {
+            if slot % 3 == 0 {
                 let new_block = hash(&format!("long-{slot}"));
-                engine = engine
+                let UpdatedCryptarchia {
+                    cryptarchia,
+                    reorged_blocks,
+                    ..
+                } = engine
                     .receive_block(new_block, long_p, slot.into())
-                    .unwrap()
-                    .0;
+                    .unwrap();
+                assert!(reorged_blocks.is_empty());
+                engine = cryptarchia;
                 long_p = new_block;
             }
             assert_eq!(engine.tip(), short_p);
         }
         // even if the long chain is much longer, it will never be accepted as it's not
         // dense enough
-        for slot in 70..100 {
+        for slot in (initial_height + s_gen)..(initial_height + 2 * s_gen) {
             let new_block = hash(&format!("long-{slot}"));
-            engine = engine
+            let UpdatedCryptarchia {
+                cryptarchia,
+                reorged_blocks,
+                ..
+            } = engine
                 .receive_block(new_block, long_p, slot.into())
-                .unwrap()
-                .0;
+                .unwrap();
+            assert!(reorged_blocks.is_empty());
+            engine = cryptarchia;
             long_p = new_block;
             assert_eq!(engine.tip(), short_p);
         }
@@ -745,27 +883,74 @@ pub mod tests {
             // however, if we set k to the fork length, it will be accepted
             let k = long_branch.length;
             assert_eq!(
-                maxvalid_bg(short_branch, engine.branches(), k, engine.config.s()).id,
+                maxvalid_bg(short_branch, engine.branches(), k, engine.config.s_gen())
+                    .0
+                    .id,
                 long_p
             );
 
-            // a longer chain which is equally dense after the fork will be selected as the
-            // main tip
-            for slot in 50..71 {
-                let new_block = hash(&format!("long-dense-{slot}"));
-                engine = engine
+            // a new denser chain will be selected as the main tip
+            let mut parent = orig_engine.tip();
+            let tip_height = engine.tip_branch().length;
+            for slot in initial_height..=tip_height {
+                let new_block = hash(&format!("dense-{slot}"));
+                let UpdatedCryptarchia {
+                    cryptarchia,
+                    reorged_blocks,
+                    ..
+                } = engine
                     .receive_block(new_block, parent, slot.into())
-                    .unwrap()
-                    .0;
+                    .unwrap();
+
+                if slot < tip_height {
+                    assert!(reorged_blocks.is_empty());
+                } else {
+                    // on the last block we trigger the reorg
+                    let expected_reorg_len = tip_height - initial_height;
+                    assert_reorged_blocks(
+                        &reorged_blocks,
+                        &orig_engine.tip(),
+                        &short_p,
+                        expected_reorg_len as usize,
+                        &cryptarchia,
+                    );
+                }
+                engine = cryptarchia;
                 parent = new_block;
             }
             assert_eq!(engine.tip(), parent);
         }
     }
 
+    /// Check that reorged blocks are as below:
+    /// origin - [... - tip]
+    ///          \_________/
+    ///         reorged blocks
+    fn assert_reorged_blocks<Id: std::fmt::Debug + Eq + Hash + Copy>(
+        blocks: &ReorgedBlocks<Id>,
+        origin_excluded: &Id,
+        tip: &Id,
+        length: usize,
+        cryptarchia: &Cryptarchia<Id>,
+    ) {
+        assert_eq!(blocks.iter().next().unwrap(), tip);
+        assert_eq!(blocks.len(), length);
+        blocks
+            .iter()
+            .rev()
+            .fold(origin_excluded, |expected_parent, id| {
+                assert_eq!(
+                    &cryptarchia.branches().get(id).unwrap().parent(),
+                    expected_parent
+                );
+                id
+            });
+    }
+
     #[test]
     fn test_getters() {
-        let engine = <Cryptarchia<_>>::from_lib(hash(&0u64), config(), State::Bootstrapping);
+        let engine =
+            <Cryptarchia<_>>::from_lib(hash(&0u64), config(), State::Bootstrapping, 0.into(), 0);
         let id_0 = engine.lib();
 
         // Get branch directly from HashMap
@@ -802,11 +987,14 @@ pub mod tests {
         // b0(LIB) - b1 - ... - b49
         //         \
         //          b100
-        let (cryptarchia, pruned_blocks) =
-            create_canonical_chain(50.try_into().unwrap(), Some(config_with(50)))
-                // Add a fork from genesis block
-                .receive_block(hash(&100u64), hash(&0u64), 1.into())
-                .expect("test block to be applied successfully.");
+        let UpdatedCryptarchia {
+            cryptarchia,
+            pruned_blocks,
+            ..
+        } = create_canonical_chain(50.try_into().unwrap(), Some(config_with(50)))
+            // Add a fork from genesis block
+            .receive_block(hash(&100u64), hash(&0u64), 1.into())
+            .expect("test block to be applied successfully.");
         // No block was pruned during Boostrapping.
         assert!(pruned_blocks.all().next().is_none());
 
@@ -825,10 +1013,14 @@ pub mod tests {
 
         // Add two new blocks to the local honest chain,
         // and check if the LIB is updated and blocks are pruned.
-        let (cryptarchia, pruned_blocks) = cryptarchia
+        let UpdatedCryptarchia {
+            cryptarchia,
+            pruned_blocks,
+            ..
+        } = cryptarchia
             .receive_block(hash(&50u64), hash(&49u64), 50.into())
             .expect("test block to be applied successfully.")
-            .0
+            .cryptarchia
             .receive_block(hash(&51u64), hash(&50u64), 51.into())
             .expect("test block to be applied successfully.");
         // The LIB was updated to b1.
@@ -852,10 +1044,13 @@ pub mod tests {
         // b0(LIB) - b1 - ... b39 - b40 - ... - b49
         //                              \
         //                               b100
-        let (cryptarchia, pruned_blocks) =
-            create_canonical_chain(50.try_into().unwrap(), Some(config_with(10)))
-                .receive_block(hash(&100u64), hash(&40u64), 41.into())
-                .expect("test block to be applied successfully.");
+        let UpdatedCryptarchia {
+            cryptarchia,
+            pruned_blocks,
+            ..
+        } = create_canonical_chain(50.try_into().unwrap(), Some(config_with(10)))
+            .receive_block(hash(&100u64), hash(&40u64), 41.into())
+            .expect("test block to be applied successfully.");
         // No block was pruned during Boostrapping.
         assert!(pruned_blocks.all().next().is_none());
 
@@ -902,16 +1097,19 @@ pub mod tests {
         // b0(LIB) - b1 - ... - b38 - b39 - b40 - ... - b49
         //                          \     \     \
         //                           b100  b101  b102
-        let (cryptarchia, pruned_blocks) =
-            create_canonical_chain(50.try_into().unwrap(), Some(config_with(10)))
-                .receive_block(hash(&100u64), hash(&38u64), 39.into())
-                .expect("test block to be applied successfully.")
-                .0
-                .receive_block(hash(&101u64), hash(&39u64), 40.into())
-                .expect("test block to be applied successfully.")
-                .0
-                .receive_block(hash(&102u64), hash(&40u64), 41.into())
-                .expect("test block to be applied successfully.");
+        let UpdatedCryptarchia {
+            cryptarchia,
+            pruned_blocks,
+            ..
+        } = create_canonical_chain(50.try_into().unwrap(), Some(config_with(10)))
+            .receive_block(hash(&100u64), hash(&38u64), 39.into())
+            .expect("test block to be applied successfully.")
+            .cryptarchia
+            .receive_block(hash(&101u64), hash(&39u64), 40.into())
+            .expect("test block to be applied successfully.")
+            .cryptarchia
+            .receive_block(hash(&102u64), hash(&40u64), 41.into())
+            .expect("test block to be applied successfully.");
         // No block was pruned during Boostrapping.
         assert!(pruned_blocks.all().next().is_none());
 
@@ -948,16 +1146,19 @@ pub mod tests {
         // b0(LIB) - b1 - ... - b38 - b39 - b40 - ... - b49
         //                          \     \
         //                           b100  b101
-        let (cryptarchia, pruned_blocks) =
-            create_canonical_chain(50.try_into().unwrap(), Some(config_with(10)))
-                .receive_block(hash(&100u64), hash(&38u64), 39.into())
-                .expect("test block to be applied successfully.")
-                .0
-                .receive_block(hash(&200u64), hash(&38u64), 39.into())
-                .expect("test block to be applied successfully.")
-                .0
-                .receive_block(hash(&101u64), hash(&39u64), 40.into())
-                .expect("test block to be applied successfully.");
+        let UpdatedCryptarchia {
+            cryptarchia,
+            pruned_blocks,
+            ..
+        } = create_canonical_chain(50.try_into().unwrap(), Some(config_with(10)))
+            .receive_block(hash(&100u64), hash(&38u64), 39.into())
+            .expect("test block to be applied successfully.")
+            .cryptarchia
+            .receive_block(hash(&200u64), hash(&38u64), 39.into())
+            .expect("test block to be applied successfully.")
+            .cryptarchia
+            .receive_block(hash(&101u64), hash(&39u64), 40.into())
+            .expect("test block to be applied successfully.");
         // No block was pruned during Boostrapping.
         assert!(pruned_blocks.all().next().is_none());
 
@@ -999,16 +1200,19 @@ pub mod tests {
         //                           b100 - b101
         //                                \
         //                                  b200
-        let (cryptarchia, pruned_blocks) =
-            create_canonical_chain(50.try_into().unwrap(), Some(config_with(10)))
-                .receive_block(hash(&100u64), hash(&38u64), 39.into())
-                .expect("test block to be applied successfully.")
-                .0
-                .receive_block(hash(&101u64), hash(&100u64), 40.into())
-                .expect("test block to be applied successfully.")
-                .0
-                .receive_block(hash(&200u64), hash(&100u64), 41.into())
-                .expect("test block to be applied successfully.");
+        let UpdatedCryptarchia {
+            cryptarchia,
+            pruned_blocks,
+            ..
+        } = create_canonical_chain(50.try_into().unwrap(), Some(config_with(10)))
+            .receive_block(hash(&100u64), hash(&38u64), 39.into())
+            .expect("test block to be applied successfully.")
+            .cryptarchia
+            .receive_block(hash(&101u64), hash(&100u64), 40.into())
+            .expect("test block to be applied successfully.")
+            .cryptarchia
+            .receive_block(hash(&200u64), hash(&100u64), 41.into())
+            .expect("test block to be applied successfully.");
         // No block was pruned during Boostrapping.
         assert!(pruned_blocks.all().next().is_none());
 
@@ -1058,7 +1262,11 @@ pub mod tests {
         // b7(LIB) - b8 - b9
         //         \
         //          b100
-        let (cryptarchia, pruned_blocks) = cryptarchia
+        let UpdatedCryptarchia {
+            cryptarchia,
+            pruned_blocks,
+            ..
+        } = cryptarchia
             .receive_block(
                 hash(&100u64),
                 cryptarchia.lib(),
@@ -1075,7 +1283,11 @@ pub mod tests {
         // b7(LIB) - b8 - b9
         //         \    \
         //          b100 b101
-        let (cryptarchia, pruned_blocks) = cryptarchia
+        let UpdatedCryptarchia {
+            cryptarchia,
+            pruned_blocks,
+            ..
+        } = cryptarchia
             .receive_block(
                 hash(&101u64),
                 cryptarchia.tip_branch().parent,
@@ -1094,7 +1306,11 @@ pub mod tests {
         // b7 - b8(LIB) - b9 - b102
         //    \         \
         //     b100      b101
-        let (cryptarchia, pruned_blocks) = cryptarchia
+        let UpdatedCryptarchia {
+            cryptarchia,
+            pruned_blocks,
+            ..
+        } = cryptarchia
             .receive_block(
                 hash(&102u64),
                 cryptarchia.tip(),

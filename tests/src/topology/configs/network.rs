@@ -1,7 +1,8 @@
 use std::time::Duration;
 
-use nomos_libp2p::{Multiaddr, SwarmConfig, ed25519};
-use nomos_utils::net::get_available_udp_port;
+use lb_libp2p::{Multiaddr, ed25519};
+use lb_node::config::network::serde as network;
+use lb_utils::net::get_available_udp_port;
 
 use crate::node_address_from_port;
 
@@ -18,10 +19,10 @@ pub struct NetworkParams {
     pub libp2p_network_layout: Libp2pNetworkLayout,
 }
 
-#[derive(Clone)]
-pub struct GeneralNetworkConfig {
-    pub swarm_config: SwarmConfig,
-    pub initial_peers: Vec<Multiaddr>,
+pub type GeneralNetworkConfig = network::Config;
+
+fn default_swarm_config() -> network::SwarmConfig {
+    network::SwarmConfig::default()
 }
 
 #[must_use]
@@ -29,20 +30,20 @@ pub fn create_network_configs(
     ids: &[[u8; 32]],
     network_params: &NetworkParams,
 ) -> Vec<GeneralNetworkConfig> {
-    let swarm_configs: Vec<SwarmConfig> = ids
+    let swarm_configs: Vec<network::SwarmConfig> = ids
         .iter()
         .map(|id| {
             let mut node_key_bytes = *id;
             let node_key = ed25519::SecretKey::try_from_bytes(&mut node_key_bytes)
                 .expect("Failed to generate secret key from bytes");
 
-            SwarmConfig {
+            network::SwarmConfig {
                 node_key,
                 port: get_available_udp_port().unwrap(),
-                chain_sync_config: cryptarchia_sync::Config {
+                chain_sync: network::chainsync::Config {
                     peer_response_timeout: Duration::from_secs(60),
                 },
-                ..Default::default()
+                ..default_swarm_config()
             }
         })
         .collect();
@@ -53,14 +54,16 @@ pub fn create_network_configs(
         .iter()
         .zip(all_initial_peers)
         .map(|(swarm_config, initial_peers)| GeneralNetworkConfig {
-            swarm_config: swarm_config.to_owned(),
-            initial_peers,
+            backend: network::BackendSettings {
+                initial_peers,
+                swarm: swarm_config.to_owned(),
+            },
         })
         .collect()
 }
 
 fn initial_peers_by_network_layout(
-    swarm_configs: &[SwarmConfig],
+    swarm_configs: &[network::SwarmConfig],
     network_params: &NetworkParams,
 ) -> Vec<Vec<Multiaddr>> {
     let mut all_initial_peers = vec![];

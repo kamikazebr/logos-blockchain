@@ -1,9 +1,11 @@
+use core::future::ready;
 use std::{
     collections::HashSet,
     task::{Context, Poll},
 };
 
 use futures::{AsyncWriteExt as _, FutureExt as _, StreamExt as _, future::BoxFuture};
+use lb_core::header::HeaderId;
 use libp2p::{
     Multiaddr, PeerId, Stream as Libp2pStream, Stream, StreamProtocol,
     core::{Endpoint, transport::PortUse},
@@ -14,7 +16,6 @@ use libp2p::{
     },
 };
 use libp2p_stream::{Behaviour as StreamBehaviour, Control, IncomingStreams};
-use nomos_core::header::HeaderId;
 use tokio::sync::{mpsc, mpsc::Sender, oneshot};
 use tracing::{debug, error};
 
@@ -29,11 +30,6 @@ use crate::{
     },
     messages::{GetTipResponse, SerialisedBlock},
 };
-
-/// Cryptarchia networking protocol for synchronizing blocks.
-const SYNC_PROTOCOL_ID: &str = "/nomos/cryptarchia/sync/1.0.0";
-
-pub const SYNC_PROTOCOL: StreamProtocol = StreamProtocol::new(SYNC_PROTOCOL_ID);
 
 const MAX_INCOMING_REQUESTS: usize = 4;
 
@@ -154,15 +150,17 @@ pub struct Behaviour {
     waker: Option<std::task::Waker>,
     /// Configuration for the behaviour.
     config: Config,
+    /// Protocol name.
+    protocol_name: StreamProtocol,
 }
 
 impl Behaviour {
     #[must_use]
-    pub fn new(config: Config) -> Self {
+    pub fn new(protocol_name: StreamProtocol, config: Config) -> Self {
         let stream_behaviour = StreamBehaviour::new();
         let mut control = stream_behaviour.new_control();
         let incoming_streams = control
-            .accept(SYNC_PROTOCOL)
+            .accept(protocol_name.clone())
             .expect("Failed to accept incoming streams for sync protocol");
         Self {
             stream_behaviour,
@@ -178,6 +176,7 @@ impl Behaviour {
             sending_tip_responses: FuturesUnordered::new(),
             waker: None,
             config,
+            protocol_name,
         }
     }
 
@@ -187,10 +186,14 @@ impl Behaviour {
         reply_sender: oneshot::Sender<Result<GetTipResponse, ChainSyncError>>,
     ) -> Result<(), ChainSyncError> {
         let mut control = self.control.clone();
+        let protocol_name = self.protocol_name.clone();
 
         self.sending_tip_requests.push(
-            async move { Downloader::send_tip_request(peer_id, &mut control, reply_sender).await }
-                .boxed(),
+            async move {
+                Downloader::send_tip_request(peer_id, &mut control, protocol_name, reply_sender)
+                    .await
+            }
+            .boxed(),
         );
 
         self.try_notify_waker();
@@ -214,9 +217,17 @@ impl Behaviour {
             latest_immutable_block,
             additional_blocks,
         );
+        let protocol_name = self.protocol_name.clone();
 
         self.sending_block_requests.push(
-            Downloader::send_download_request(peer_id, control, request, reply_sender).boxed(),
+            Downloader::send_download_request(
+                peer_id,
+                control,
+                request,
+                protocol_name,
+                reply_sender,
+            )
+            .boxed(),
         );
 
         self.try_notify_waker();
@@ -247,7 +258,7 @@ impl Behaviour {
 
             self.incoming_streams_to_close.push(
                 async move {
-                    let _ = stream.close().await;
+                    drop(stream.close().await);
                 }
                 .boxed(),
             );
@@ -278,7 +289,7 @@ impl Behaviour {
         if concurrent_requests >= MAX_INCOMING_REQUESTS {
             self.incoming_streams_to_close.push(
                 async move {
-                    let _ = stream.close().await;
+                    drop(stream.close().await);
                 }
                 .boxed(),
             );
@@ -301,7 +312,11 @@ impl Behaviour {
 
     fn handle_blocks_request_available(&self, request_stream: BlocksRequestStream) {
         self.receiving_block_responses.push(
-            Downloader::receive_blocks(request_stream, self.config.peer_response_timeout).boxed(),
+            ready(Downloader::receive_blocks(
+                request_stream,
+                self.config.peer_response_timeout,
+            ))
+            .boxed(),
         );
 
         self.try_notify_waker();
@@ -416,10 +431,6 @@ impl NetworkBehaviour for Behaviour {
             .on_connection_handler_event(peer_id, conn_id, event);
     }
 
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "It contains only basic polling logic"
-    )]
     fn poll(
         &mut self,
         cx: &mut Context<'_>,
@@ -512,12 +523,12 @@ impl NetworkBehaviour for Behaviour {
 mod tests {
     use std::{collections::HashSet, iter, time::Duration};
 
-    use cryptarchia_engine::Slot;
     use futures::StreamExt as _;
-    use libp2p::{Multiaddr, PeerId, Swarm, bytes::Bytes, swarm::SwarmEvent};
+    use lb_core::header::HeaderId;
+    use lb_cryptarchia_engine::Slot;
+    use libp2p::{Multiaddr, PeerId, StreamProtocol, Swarm, bytes::Bytes, swarm::SwarmEvent};
     use libp2p_swarm_test::SwarmExt as _;
-    use nomos_core::header::HeaderId;
-    use rand::{Rng, thread_rng};
+    use rand::{Rng as _, thread_rng};
     use tokio::sync::oneshot;
 
     use crate::{
@@ -634,8 +645,6 @@ mod tests {
             while let Some(event) = provider_swarm.next().await {
                 if let SwarmEvent::Behaviour(Event::ProvideBlocksRequest { .. }) = event {
                     tokio::time::sleep(Duration::from_secs(100)).await;
-                } else {
-                    continue;
                 }
             }
         });
@@ -717,7 +726,7 @@ mod tests {
         assert_eq!(errors.len(), 1);
     }
 
-    async fn setup_provider_swarm() -> (Swarm<Behaviour>, PeerId, Multiaddr) {
+    fn setup_provider_swarm() -> (Swarm<Behaviour>, PeerId, Multiaddr) {
         let mut provider_swarm = new_swarm_with_quic();
         let provider_peer_id = *provider_swarm.local_peer_id();
 
@@ -774,13 +783,13 @@ mod tests {
     impl ProviderBehavior for RejectingProvider {
         fn handle_tip_request(&self) -> TipResponse {
             ProviderResponse::Unavailable {
-                reason: "Node is not in online mode".to_string(),
+                reason: "Node is not in online mode".to_owned(),
             }
         }
 
         fn handle_blocks_request(&self, _requested: usize) -> BlocksResponse {
             ProviderResponse::Unavailable {
-                reason: "Node is not in online mode".to_string(),
+                reason: "Node is not in online mode".to_owned(),
             }
         }
     }
@@ -836,7 +845,7 @@ mod tests {
     }
 
     async fn start_provider_and_downloader(blocks_count: usize) -> (Swarm<Behaviour>, PeerId) {
-        let (provider_swarm, provider_peer_id, provider_addr) = setup_provider_swarm().await;
+        let (provider_swarm, provider_peer_id, provider_addr) = setup_provider_swarm();
 
         tokio::spawn(run_provider(
             provider_swarm,
@@ -848,7 +857,7 @@ mod tests {
     }
 
     async fn start_rejecting_provider() -> (Swarm<Behaviour>, PeerId) {
-        let (provider_swarm, provider_peer_id, provider_addr) = setup_provider_swarm().await;
+        let (provider_swarm, provider_peer_id, provider_addr) = setup_provider_swarm();
 
         tokio::spawn(run_provider(provider_swarm, RejectingProvider));
 
@@ -857,7 +866,7 @@ mod tests {
     }
 
     async fn start_provider_with_stream_error() -> (Swarm<Behaviour>, PeerId) {
-        let (provider_swarm, provider_peer_id, provider_addr) = setup_provider_swarm().await;
+        let (provider_swarm, provider_peer_id, provider_addr) = setup_provider_swarm();
 
         tokio::spawn(run_provider(
             provider_swarm,
@@ -949,7 +958,7 @@ mod tests {
             .with_quic()
             .with_dns()
             .unwrap()
-            .with_behaviour(|_| Behaviour::new(config))
+            .with_behaviour(|_| Behaviour::new(StreamProtocol::new("/tests/chain-sync"), config))
             .unwrap()
             .with_swarm_config(|c| c.with_idle_connection_timeout(Duration::from_secs(10)))
             .build()

@@ -1,4 +1,4 @@
-use groth16::{Fr, Groth16Input, Groth16InputDeser};
+use lb_groth16::{Fr, Groth16Input, Groth16InputDeser};
 use serde::{Deserialize, Serialize};
 
 #[derive(Copy, Clone)]
@@ -7,6 +7,7 @@ pub struct PoCChainInputs {
     mantle_tx_hash: Groth16Input,
 }
 
+#[derive(Clone, Debug)]
 pub struct PoCChainInputsData {
     pub voucher_root: Fr,
     pub mantle_tx_hash: Fr,

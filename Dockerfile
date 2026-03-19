@@ -2,69 +2,42 @@
 # check=skip=SecretsUsedInArgOrEnv
 # Ignore warnings about sensitive information as this is test data.
 
-ARG VERSION=v0.3.0
-ARG PLATFORM=linux-x86_64
+ARG LB_CIRCUITS_VERSION=v0.4.1
+ARG LB_NODE_VERSION=0.1.3
 
 # ===========================
 # BUILD IMAGE
 # ===========================
 
-FROM rust:1.90.0-slim-bookworm AS builder
+FROM alpine:latest AS builder
 
-ARG VERSION
-ARG PLATFORM
+ARG LB_CIRCUITS_VERSION
+ARG LB_NODE_VERSION
 
-LABEL maintainer="augustinas@status.im" \
-    source="https://github.com/logos-co/nomos-node" \
-    description="Nomos node build image"
-
-WORKDIR /nomos
+WORKDIR /logos-blockchain
 COPY . .
 
-# Install dependencies needed for building RocksDB.
-RUN apt-get update && apt-get install -yq \
-    git gcc g++ clang libssl-dev pkg-config ca-certificates curl
-
-RUN chmod +x testnet/scripts/download_circuit_binaries.sh && \
-    testnet/scripts/download_circuit_binaries.sh "$VERSION" "$PLATFORM"
-
-RUN cargo build --release -p nomos-node
+RUN apk add --no-cache curl bash
+RUN scripts/setup-logos-blockchain-circuits.sh "$LB_CIRCUITS_VERSION" "/opt/circuits"
+RUN scripts/setup-logos-blockchain-node.sh "$LB_NODE_VERSION" "linux-$(uname -m)"
 
 # ===========================
 # NODE IMAGE
 # ===========================
 
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 
-ARG VERSION
-ARG PLATFORM
+ARG LB_CIRCUITS_VERSION
 
 LABEL maintainer="augustinas@status.im" \
-    source="https://github.com/logos-co/nomos-node" \
-    description="Nomos node image"
+    source="https://github.com/logos-blockchain/logos-blockchain" \
+    description="Logos blockchain node image"
 
-RUN apt-get update && apt-get install -yq \
-    libstdc++6 \
-    libssl3 \
-    ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /opt/circuits /opt/circuits
+COPY --from=builder /usr/local/bin/logos-blockchain-node /usr/local/bin/logos-blockchain-node
 
-COPY --from=builder /nomos/zk/proofs /opt/nomos/proofs
-COPY --from=builder /nomos/bin/circuits /opt/nomos/circuits
-COPY --from=builder /nomos/target/release/nomos-node /usr/local/bin/nomos-node
-
-ENV NOMOS_POL_PROVING_KEY_PATH="/opt/nomos/proofs/pol/src/proving_key/pol.zkey" \
-    NOMOS_POC_PROVING_KEY_PATH="/opt/nomos/proofs/poc/src/proving_key/proof_of_claim.zkey" \
-    NOMOS_POQ_PROVING_KEY_PATH="/opt/nomos/proofs/poq/src/proving_key/poq.zkey" \
-    NOMOS_ZKSIGN_PROVING_KEY_PATH="/opt/nomos/proofs/zksign/src/proving_key/zksign.zkey"
-
-ENV NOMOS_PROVER="/opt/nomos/circuits/${PLATFORM}/prover-${VERSION}-${PLATFORM}/prover/prover" \
-    NOMOS_VERIFIER="/opt/nomos/circuits/${PLATFORM}/verifier-${VERSION}-${PLATFORM}/verifier/verifier" \
-    NOMOS_POC="/opt/nomos/circuits/${PLATFORM}/poc-${VERSION}-${PLATFORM}/witness-generator/poc" \
-    NOMOS_POL="/opt/nomos/circuits/${PLATFORM}/pol-${VERSION}-${PLATFORM}/witness-generator/pol" \
-    NOMOS_POQ="/opt/nomos/circuits/${PLATFORM}/poq-${VERSION}-${PLATFORM}/witness-generator/poq" \
-    NOMOS_ZKSIGN="/opt/nomos/circuits/${PLATFORM}/zksign-${VERSION}-${PLATFORM}/witness-generator/zksign"
+ENV LOGOS_BLOCKCHAIN_CIRCUITS=/opt/circuits
 
 EXPOSE 3000 8080 9000 60000
 
-ENTRYPOINT ["nomos-node"]
+ENTRYPOINT ["logos-blockchain-node"]

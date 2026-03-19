@@ -1,2 +1,0 @@
-language    = "C"  # Not "C++"
-no_includes = true

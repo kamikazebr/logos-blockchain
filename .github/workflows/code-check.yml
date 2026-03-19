@@ -20,7 +20,7 @@ jobs:
         uses: actions-rs/toolchain@88dc2356392166efad76775c878094f4e83ff746  # Version 1.0.6
         with:
           # The same version must be used in the `.pre-commit-config.yaml` file
-          toolchain: nightly-2025-08-02
+          toolchain: nightly-2026-01-18
           profile: minimal
           components: rustfmt
           override: true
@@ -30,7 +30,7 @@ jobs:
           command: fmt
           args: --all --check
       - name: Install taplo CLI
-        run: cargo install taplo-cli --locked --version 0.9.3
+        run: cargo install taplo-cli --locked --version 0.10.0
       - name: Run taplo lint
         run: taplo lint
       - name: Run taplo fmt
@@ -44,41 +44,78 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
-      - name: Run `cargo deny`
-        uses: EmbarkStudios/cargo-deny-action@34899fc7ba81ca6268d5947a7a16b4649013fea1 # Version 2.0.11
-        with:
-          # All is set in the config file
-          arguments:
-          command-arguments: "--hide-inclusion-graph -c .cargo-deny.toml --show-stats -D warnings"
+
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      # `cargo-deny`'s action is compiled and run using `musl` but we generally use `gnu` in our local machines.
+      # Thus, results may differ from local runs.
+      # To avoid this, we install and run `cargo-deny` manually.
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked --version 0.19.0
+
+      - name: Run cargo-deny
+        run: cargo-deny --locked --all-features check --hide-inclusion-graph -c .cargo-deny.toml --show-stats -D warnings
 
   features:
     name: Check packages feature combinations
     strategy:
       fail-fast: false
       matrix:
-        os: [ ubuntu-latest, macos-latest ]
-    runs-on: ${{ matrix.os }}
+        platform:
+          # Using self-hosted runners because we were running out of memory on GitHub-hosted runners
+          - os: [self-hosted, Linux]
+            label: self-hosted-linux
+          - os: [self-hosted, macOS]
+            label: self-hosted-macos
+    runs-on: ${{ matrix.platform.os }}
     steps:
+      # Disable rustup override before checkout, so the toolchain state is clean before any workspace files or
+      # .rust-toolchain.toml are present. Prevents a stale override from affecting the toolchain resolution during
+      # checkout or subsequent steps.
+      - name: Disable rustup override
+        run: rustup override unset || true
+
       - name: Checkout repository
         uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
+      - name: Setup Circuits
+        uses: ./.github/actions/setup-circuits
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Install cargo-hack
         uses: taiki-e/install-action@5651179950649c44da31d346537e20c0534f0f25  # Version 2.49.35
         with:
           tool: cargo-hack
+
+      # Prune after Install cargo-hack, before Set up Cargo cache — frees disk space from the previous run's leftover
+      # artifacts (incremental compile dirs, fingerprints, build dirs) before the cache is restored. This means the
+      # restored cache lands onto a disk that has already been cleaned, maximizing the chance the restore succeeds
+      # without hitting disk limits.
+      - name: Prune disk space (cache-aware, self-hosted)
+        uses: ./.github/actions/prune-disk-space
+
       - name: Set up Cargo cache
         uses: ./.github/actions/setup-cargo-cache
         with:
-          key: ${{ github.ref }}->${{ github.workflow }}->${{ github.job }}->${{ matrix.os }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Run cargo-hack
-        env:
-          RUSTFLAGS: -D warnings
-        run: cargo hack --feature-powerset --no-dev-deps check
+          key-prefix: code-check/feature-combinations/${{ matrix.platform.label }}
+
+      - name: Run Cargo Hack Check (Cache-Aware)
+        uses: ./.github/actions/cargo-hack-check-cached
+
       - name: Update Cargo cache
         if: success() || failure()
         uses: ./.github/actions/update-cargo-cache
         with:
-          key: ${{ github.ref }}->${{ github.workflow }}->${{ github.job }}->${{ matrix.os }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          key-prefix: code-check/feature-combinations/${{ matrix.platform.label }}
+      
+      - name: Clean up build artifacts
+        if: success() || failure()
+        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
+        with:
+          command: clean
 
   unused-deps:
     name: Check for unused dependencies
@@ -106,25 +143,34 @@ jobs:
         os: [ ubuntu-latest, macos-latest ]
     runs-on: ${{ matrix.os }}
     env:
-          RUSTFLAGS: -D warnings
+      RUSTFLAGS: -D warnings
     steps:
       - name: Checkout repository
         uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
+
       - name: Set up Cargo cache
         uses: ./.github/actions/setup-cargo-cache
         with:
-          key: ${{ github.ref }}->${{ github.workflow }}->${{ github.job }}->${{ matrix.os }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}        
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          key-prefix: code-check/lints/${{ matrix.os }}
+
+      - name: Setup Circuits
+        uses: ./.github/actions/setup-circuits
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Run cargo clippy on workspace
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
         with:
           command: clippy
-          args: --all --all-targets --all-features
+          args: --locked --all --all-targets --all-features
+
       - name: Update Cargo cache
         if: success() || failure()
         uses: ./.github/actions/update-cargo-cache
         with:
-          key: ${{ github.ref }}->${{ github.workflow }}->${{ github.job }}->${{ matrix.os }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          key-prefix: code-check/lints/${{ matrix.os }}
  
   tests:
     name: Run test suite
@@ -134,62 +180,54 @@ jobs:
       matrix:
         os:
           # Using self-hosted runners because we were running out of memory on GitHub-hosted runners
-          - [self-hosted, Linux]
-          - [self-hosted, macOS]
+          - [ self-hosted, Linux ]
+          - [ self-hosted, macOS ]
     runs-on: ${{ matrix.os }}
     steps:
       - name: Disable rustup override
-        run: rustup override unset
+        run: rustup override unset || true
 
       - name: Checkout repository
         uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
-
-      - name: Set up Cargo cache
-        uses: ./.github/actions/setup-cargo-cache
-        with:
-          key: ${{ github.ref }}->${{ github.workflow }}->${{ github.job }}->${{ join(matrix.os, '_') }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Run the node binary to check the config file validity
-        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
-        with:
-          command: run
-          args: -p nomos-node nodes/nomos-node/config.yaml --check-config
-
-      - name: Run the executor binary to check the config file validity
-        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
-        with:
-          command: run
-          args: -p nomos-executor nodes/nomos-executor/config.yaml --check-config
-
-      # This includes testing feature needed for tests
-      - name: Build binaries with all features
-        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
-        with:
-          command: build
-          args: --all-features
 
       - name: Setup Circuits
         uses: ./.github/actions/setup-circuits
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          version: 'v0.1.0'
 
-      - name: Cargo test
+      # Prune before any builds.
+      - name: Prune disk space (cache-aware, self-hosted)
+        uses: ./.github/actions/prune-disk-space
+
+      - name: Run the node binary with the testing feature to check the one-node config files validity
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
-        env:
-          POL_PROOF_DEV_MODE: true
-          CONSENSUS_SLOT_TIME: 5
         with:
-          command: test
-          # We don't test benches as they take 6h+, leading to a timeout
-          args: --all --lib --bins --tests --examples --all-features
+          command: run
+          args: >-
+            --locked -p logos-blockchain-node --features testing 
+            -- nodes/node/standalone-node-config.yaml --check-config --deployment nodes/node/standalone-deployment-config.yaml
 
-      - name: Update Cargo cache
-        if: success() || failure()
-        uses: ./.github/actions/update-cargo-cache
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@5651179950649c44da31d346537e20c0534f0f25 # Version 2.49.35
         with:
-          key: ${{ github.ref }}->${{ github.workflow }}->${{ github.job }}->${{ join(matrix.os, '_') }}
+          tool: cargo-nextest
+
+      - name: Cargo test all except end-to-end integration tests
+        timeout-minutes: 90
+        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
+        with:
+          command: nextest
+          # - We don't test benches as they take 6h+, leading to a timeout
+          # - We also do not test end-to-end integration tests here as those are run in a dedicated step below
+          args: >-
+            run --workspace --locked --lib --bins --examples --tests --retries 2
+            --all-features --no-fail-fast --exclude logos-blockchain-tests
+
+      - name: Clean up build artifacts
+        if: success() || failure()
+        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
+        with:
+          command: clean
 
       - name: Upload integration tests results
         uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # Version 4.6.2
@@ -198,27 +236,3 @@ jobs:
           name: integration-test-artifacts-${{ runner.os }}-${{ github.sha }}
           include-hidden-files: true
           path: tests/.tmp*
-  
-  build-docker:
-    name: Trigger Docker build
-    runs-on: ubuntu-latest
-    needs:
-      - formatting
-      - cargo-deny
-      - features
-      - unused-deps
-      - lints
-      - tests
-    env:
-      DOCKER_BUILD_WORKFLOW_FILE: build-docker.yml # Change this in case of file renamings
-    steps:
-      - name: Trigger "Docker build" workflow
-        uses: actions/github-script@3908079ba1e7bce10117ad701c321d07e89017a9 # Version 7.0.1
-        with:
-          script: |
-            github.rest.actions.createWorkflowDispatch({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: '${{ env.DOCKER_BUILD_WORKFLOW_FILE }}',
-              ref: '${{ github.head_ref || github.ref }}',
-            })

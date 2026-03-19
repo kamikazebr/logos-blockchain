@@ -1,63 +1,68 @@
 [package]
-edition = { workspace = true }
-license = { workspace = true }
-name    = "tests"
-publish = false
-version = "0.1.0"
+categories  = { workspace = true }
+description = { workspace = true }
+edition     = { workspace = true }
+keywords    = { workspace = true }
+license     = { workspace = true }
+name        = "logos-blockchain-tests"
+publish     = false
+readme      = { workspace = true }
+repository  = { workspace = true }
+version     = { workspace = true }
 
 [lints]
 workspace = true
 
 [dependencies]
-blst                     = { version = "0.3.11" }
-broadcast-service        = { workspace = true }
-chain-leader             = { workspace = true }
-chain-service            = { workspace = true }
-common-http-client       = { workspace = true }
-cryptarchia-engine       = { features = ["serde"], workspace = true }
-cryptarchia-sync         = { workspace = true }
-ed25519-dalek            = { version = "3.0.0-pre.0", features = ["rand_core", "serde"] }
-executor-http-client     = { workspace = true }
-futures                  = { default-features = false, version = "0.3" }
-futures-util             = { default-features = false, version = "0.3.31" }
-hex                      = { default-features = false, version = "0.4.3" }
-kzgrs-backend            = { workspace = true }
-nomos-api                = { workspace = true }
-nomos-blend-message      = { workspace = true }
-nomos-blend-scheduling   = { workspace = true }
-nomos-blend-service      = { features = ["libp2p"], workspace = true }
-nomos-core               = { workspace = true }
-nomos-da-dispersal       = { workspace = true }
-nomos-da-network-core    = { workspace = true }
-nomos-da-network-service = { workspace = true }
-nomos-da-sampling        = { workspace = true }
-nomos-da-verifier        = { workspace = true }
-nomos-executor           = { default-features = false, features = ["testing", "tracing"], workspace = true }
-nomos-http-api-common    = { workspace = true }
-nomos-ledger             = { features = ["serde"], workspace = true }
-nomos-libp2p             = { workspace = true }
-nomos-membership-service = { workspace = true }
-nomos-network            = { features = ["libp2p"], workspace = true }
-nomos-node               = { default-features = false, features = ["testing"], workspace = true }
-nomos-time               = { workspace = true }
-nomos-tracing            = { workspace = true }
-nomos-tracing-service    = { workspace = true }
-nomos-utils              = { workspace = true }
-nomos-wallet             = { workspace = true }
-num-bigint               = { version = "0.4", default-features = false }
-rand                     = { workspace = true }
-rand_core                = { version = "^0.9" }
-reqwest                  = { workspace = true, features = ["json"] }
-serde                    = { version = "1", features = ["derive"] }
-serde_json               = "1.0"
-serde_yaml               = "0.9"
-serial_test              = "3.1.1"
-subnetworks-assignations = { workspace = true }
-tempfile                 = { workspace = true }
-time                     = { default-features = false, version = "0.3" }
-tokio                    = "1"
-tracing                  = { workspace = true }
-tx-service               = { features = ["libp2p", "mock"], workspace = true }
+async-trait                      = "0.1"
+cucumber                         = { features = ["output-junit"], version = "=0.22.0" }
+derivative                       = "2.2.0"
+ed25519                          = "2.2.3"
+futures                          = { default-features = false, version = "0.3" }
+futures-util                     = { default-features = false, version = "0.3.31" }
+hex                              = { default-features = false, version = "0.4.3" }
+lb-chain-broadcast-service       = { workspace = true }
+lb-chain-service                 = { workspace = true }
+lb-common-http-client            = { workspace = true }
+lb-core                          = { workspace = true }
+lb-cryptarchia-engine            = { features = ["serde"], workspace = true }
+lb-groth16                       = { workspace = true }
+lb-http-api-common               = { workspace = true }
+lb-key-management-system-service = { workspace = true }
+lb-libp2p                        = { workspace = true }
+lb-network-service               = { features = ["libp2p"], workspace = true }
+lb-node                          = { default-features = false, features = ["testing"], workspace = true }
+lb-testing-framework             = { workspace = true }
+lb-tx-service                    = { features = ["libp2p", "mock"], workspace = true }
+lb-utils                         = { workspace = true }
+lb-wallet                        = { workspace = true }
+lb-zksign                        = { workspace = true }
+libp2p                           = "0.55.0"
+num-bigint                       = { default-features = false, version = "0.4" }
+rand                             = { workspace = true }
+reqwest                          = { features = ["json"], workspace = true }
+rpds                             = "1.1"
+serde_json                       = "1.0"
+serde_yaml                       = "0.9"
+serial_test                      = "3.1.1"
+strum                            = "0.27.2"
+tempfile                         = { workspace = true }
+testing-framework-core           = { workspace = true }
+testing-framework-runner-local   = { workspace = true }
+thiserror                        = { default-features = false, version = "2.0" }
+time                             = { default-features = false, version = "0.3" }
+tokio                            = "1"
+tracing                          = { workspace = true }
+tracing-subscriber               = { features = ["env-filter", "fmt"], version = "0.3" }
+
+[features]
+cucumber             = []
+cucumber_stand_alone = []
+testing_framework    = []
+
+[[test]]
+name = "test_blend_local_setup"
+path = "src/tests/blend/local.rs"
 
 [[test]]
 name = "test_cryptarchia_happy_path"
@@ -76,25 +81,43 @@ name = "test_immutable_blocks"
 path = "src/tests/cryptarchia/immutable_blocks.rs"
 
 [[test]]
-name = "test_da"
-path = "src/tests/da/disperse.rs"
-
-[[test]]
-name = "test_da_api"
-path = "src/tests/da/api.rs"
+name = "test_invalid_tx_handling"
+path = "src/tests/cryptarchia/invalid_tx_handling.rs"
 
 [[test]]
 name = "test_mempool_api"
 path = "src/tests/mempool/api.rs"
 
 [[test]]
-name = "test_membership_api"
-path = "src/tests/membership/api.rs"
+name = "test_mantle_sdp_ops"
+path = "src/tests/mantle/sdp_ops.rs"
 
 [[test]]
-name = "test_membership_disperse"
-path = "src/tests/membership/disperse.rs"
+name = "test_cli_restart"
+path = "src/tests/cli/restart.rs"
 
 [[test]]
-name = "test_da_historic_sampling"
-path = "src/tests/da/historic_sampling.rs"
+name              = "test_testing_framework_smoke_local"
+path              = "src/tests/testing_framework/smoke_local.rs"
+required-features = ["testing_framework"]
+
+[[test]]
+name              = "test_testing_framework_external_urls_inscription"
+path              = "src/tests/testing_framework/external_urls_inscription.rs"
+required-features = ["testing_framework"]
+
+[[test]]
+name              = "test_testing_framework_fork_detector"
+path              = "src/tests/testing_framework/fork_detector.rs"
+required-features = ["testing_framework"]
+
+[[test]]
+name              = "test_testing_framework_cucumber_smoke_local"
+path              = "cucumber_tests/stand_alone_tests/cucumber_smoke_local.rs"
+required-features = ["cucumber_stand_alone"]
+
+[[test]]
+harness           = false                        # Cucumber will have its own main() function to run tests.
+name              = "cucumber"
+path              = "cucumber_tests/cucumber.rs"
+required-features = ["cucumber"]

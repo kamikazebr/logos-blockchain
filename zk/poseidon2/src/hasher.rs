@@ -3,17 +3,9 @@ use ark_ff::Field as _;
 
 use crate::{Digest, Poseidon2Bn254};
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Poseidon2Hasher {
     state: [Fr; 3],
-}
-
-impl Clone for Poseidon2Hasher {
-    fn clone(&self) -> Self {
-        Self {
-            state: self.state.to_vec().try_into().unwrap(),
-        }
-    }
 }
 
 impl Default for Poseidon2Hasher {
@@ -43,6 +35,15 @@ impl Poseidon2Hasher {
         self.update_one(&Fr::ONE);
     }
 
+    /// Only use `compress` before `finalize` for poseidon2 without SAFE padding
+    pub fn compress(&mut self, inputs: &[Fr; 2]) {
+        self.state[0] += inputs[0];
+        self.state[1] += inputs[1];
+        Poseidon2Bn254::permute_mut::<jf_poseidon2::constants::bn254::Poseidon2ParamsBn3, 3>(
+            &mut self.state,
+        );
+    }
+
     pub const fn finalize(self) -> Fr {
         self.state[0]
     }
@@ -52,6 +53,12 @@ impl Digest for Poseidon2Hasher {
     fn digest(inputs: &[Fr]) -> Fr {
         let mut hasher = Self::new();
         hasher.update(inputs);
+        hasher.finalize()
+    }
+
+    fn compress(inputs: &[Fr; 2]) -> Fr {
+        let mut hasher = Self::new();
+        hasher.compress(inputs);
         hasher.finalize()
     }
 

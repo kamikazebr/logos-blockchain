@@ -1,50 +1,36 @@
-use core::time::Duration;
-use std::{num::NonZeroU64, str::FromStr as _};
+use lb_key_management_system_service::keys::{Ed25519Key, ZkKey};
+use lb_node::config::blend::serde as blend;
+use num_bigint::BigUint;
 
-use nomos_blend_message::crypto::keys::Ed25519PrivateKey;
-use nomos_blend_service::core::backends::libp2p::Libp2pBlendBackendSettings;
-use nomos_libp2p::{
-    Multiaddr,
-    ed25519::{self},
-    protocol_name::StreamProtocol,
-};
+use crate::common::kms::key_id_for_preload_backend;
 
-#[derive(Clone)]
-pub struct GeneralBlendConfig {
-    pub backend: Libp2pBlendBackendSettings,
-    pub private_key: Ed25519PrivateKey,
-}
+pub type GeneralBlendConfig = (blend::Config, Ed25519Key, ZkKey);
 
 #[must_use]
 pub fn create_blend_configs(ids: &[[u8; 32]], ports: &[u16]) -> Vec<GeneralBlendConfig> {
     ids.iter()
         .zip(ports)
         .map(|(id, port)| {
-            let mut node_key_bytes = *id;
-            let node_key = ed25519::SecretKey::try_from_bytes(&mut node_key_bytes)
-                .expect("Failed to generate secret key from bytes");
-
-            GeneralBlendConfig {
-                backend: Libp2pBlendBackendSettings {
-                    listening_address: Multiaddr::from_str(&format!(
-                        "/ip4/127.0.0.1/udp/{port}/quic-v1",
-                    ))
-                    .unwrap(),
-                    node_key,
-                    core_peering_degree: 1..=3,
-                    minimum_messages_coefficient: NonZeroU64::try_from(1)
-                        .expect("Minimum messages coefficient cannot be zero."),
-                    normalization_constant: 1.03f64
-                        .try_into()
-                        .expect("Normalization constant cannot be negative."),
-                    edge_node_connection_timeout: Duration::from_secs(1),
-                    max_edge_node_incoming_connections: 300,
-                    max_dial_attempts_per_peer: NonZeroU64::try_from(3)
-                        .expect("Max dial attempts per peer cannot be zero."),
-                    protocol_name: StreamProtocol::new("/blend/integration-tests"),
-                },
-                private_key: Ed25519PrivateKey::from(*id),
-            }
+            let private_key = Ed25519Key::from_bytes(id);
+            // We need unique ZK secret keys, so we just derive them deterministically from
+            // the generated Ed25519 public keys, which are guaranteed to be unique because
+            // they are in turned derived from node ID.
+            let secret_zk_key =
+                ZkKey::from(BigUint::from_bytes_le(private_key.public_key().as_bytes()));
+            let blend_config = {
+                let mut base_config = blend::Config::with_required_values(blend::RequiredValues {
+                    non_ephemeral_signing_key_id: key_id_for_preload_backend(
+                        &private_key.clone().into(),
+                    ),
+                    secret_key_kms_id: key_id_for_preload_backend(&secret_zk_key.clone().into()),
+                });
+                base_config.core.backend.listening_address =
+                    format!("/ip4/127.0.0.1/udp/{port}/quic-v1")
+                        .parse()
+                        .unwrap();
+                base_config
+            };
+            (blend_config, private_key, secret_zk_key)
         })
         .collect()
 }

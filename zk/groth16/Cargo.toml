@@ -1,8 +1,13 @@
 [package]
-edition = { workspace = true }
-license = { workspace = true }
-name    = "groth16"
-version = "0.1.0"
+categories  = { workspace = true }
+description = { workspace = true }
+edition     = { workspace = true }
+keywords    = { workspace = true }
+license     = { workspace = true }
+name        = "logos-blockchain-groth16"
+readme      = { workspace = true }
+repository  = { workspace = true }
+version     = { workspace = true }
 
 [dependencies]
 ark-bn254     = { default-features = false, features = ["curve"], version = "0.4" }
@@ -13,7 +18,7 @@ ark-relations = "0.4.0"
 ark-serialize = { default-features = false, version = "0.4.2" }
 ark-std       = { default-features = false, version = "0.4.0" }
 generic-array = { default-features = false, version = "1.2" }
-hex           = { default-features = false, features = ["alloc"], optional = true, version = "0.4" }
+hex           = { default-features = false, features = ["alloc"], version = "0.4" }
 num-bigint    = { default-features = false, version = "0.4" }
 rand          = { default-features = false, features = ["std", "std_rng"], version = "0.8.5" }
 serde         = { default-features = false, features = ["derive"], optional = true, version = "1.0" }
@@ -32,4 +37,4 @@ ignored = ["rand"]
 
 [features]
 default = []
-deser   = ["dep:hex", "dep:serde", "dep:serde_json", "generic-array/serde"]
+deser   = ["dep:serde", "dep:serde_json", "generic-array/serde"]

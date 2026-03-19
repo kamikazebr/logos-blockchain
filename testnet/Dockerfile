@@ -2,74 +2,71 @@
 # check=skip=SecretsUsedInArgOrEnv
 # Ignore warnings about sensitive information as this is test data.
 
-ARG VERSION=v0.3.0
-ARG PLATFORM=linux-x86_64
+ARG VERSION=v0.4.1
 
 # ===========================
 # BUILD IMAGE
 # ===========================
-
-FROM rust:1.90.0-slim-bookworm AS builder
+FROM rust:1.94.0-slim-bookworm AS builder
 
 ARG VERSION
-ARG PLATFORM
 
-LABEL maintainer="augustinas@status.im" \
-    source="https://github.com/logos-co/nomos-node" \
-    description="Nomos testnet build image"
-
-WORKDIR /nomos
+WORKDIR /logos-blockchain
 COPY . .
 
 # Install dependencies needed for building RocksDB.
 RUN apt-get update && apt-get install -yq \
-    git gcc g++ clang libssl-dev pkg-config ca-certificates curl
+    git gcc g++ clang libssl-dev pkg-config ca-certificates curl unzip
 
-RUN chmod +x testnet/scripts/download_circuit_binaries.sh && \
-    testnet/scripts/download_circuit_binaries.sh "$VERSION" "$PLATFORM"
+# Install Bun for L2 demo frontend.
+RUN curl -fsSL https://bun.sh/install | bash
+ENV PATH="/root/.bun/bin:$PATH"
 
-RUN cargo build --release --all-features
+# Build Frontend Webapp
+WORKDIR /logos-blockchain/testnet/l2-sequencer-archival-demo/webapp
+RUN bun install --frozen-lockfile
+RUN VITE_SEQUENCER_URL=/api/sequencer VITE_ARCHIVER_URL=/api/archiver bun run build
+
+# Build Rust Binaries & Circuits
+WORKDIR /logos-blockchain
+ENV LOGOS_BLOCKCHAIN_CIRCUITS=/opt/circuits
+RUN scripts/setup-logos-blockchain-circuits.sh "$VERSION" "$LOGOS_BLOCKCHAIN_CIRCUITS"
+RUN cargo build --locked --release --all-features
 
 # ===========================
 # NODE IMAGE
 # ===========================
-
 FROM debian:bookworm-slim
 
 ARG VERSION
-ARG PLATFORM
 
 LABEL maintainer="augustinas@status.im" \
-    source="https://github.com/logos-co/nomos-node" \
-    description="Nomos node image"
+    source="https://github.com/logos-blockchain/logos-blockchain" \
+    description="Logos Blockchain node and other binaries image"
 
 RUN apt-get update && apt-get install -yq \
-    libstdc++6 \
-    libssl3 \
-    ca-certificates \
+    libstdc++6 libssl3 ca-certificates nginx \
+    python3 python3-pip curl git \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /nomos/zk/proofs /opt/nomos/proofs
-COPY --from=builder /nomos/bin/circuits /opt/nomos/circuits
+# Copy Circuits
+COPY --from=builder /opt/circuits /opt/circuits
+ENV LOGOS_BLOCKCHAIN_CIRCUITS=/opt/circuits
 
-COPY --from=builder /nomos/target/release/nomos-node /usr/bin/nomos-node
-COPY --from=builder /nomos/target/release/nomos-executor /usr/bin/nomos-executor
-COPY --from=builder /nomos/target/release/nomos-cli /usr/bin/nomos-cli
-COPY --from=builder /nomos/target/release/cfgsync-server /usr/bin/cfgsync-server
-COPY --from=builder /nomos/target/release/cfgsync-client /usr/bin/cfgsync-client
+# Copy Binaries
+COPY --from=builder /logos-blockchain/target/release/logos-blockchain-node /usr/bin/
+COPY --from=builder /logos-blockchain/target/release/logos-blockchain-cfgsync-server /usr/bin/
+COPY --from=builder /logos-blockchain/target/release/logos-blockchain-cfgsync-client /usr/bin/
+COPY --from=builder /logos-blockchain/target/release/logos-blockchain-demo-sequencer /usr/bin/
+COPY --from=builder /logos-blockchain/target/release/logos-blockchain-demo-archiver /usr/bin/
+COPY --from=builder /logos-blockchain/target/release/logos-blockchain-faucet /usr/bin/
 
-ENV NOMOS_POL_PROVING_KEY_PATH="/opt/nomos/proofs/pol/src/proving_key/pol.zkey" \
-    NOMOS_POC_PROVING_KEY_PATH="/opt/nomos/proofs/poc/src/proving_key/proof_of_claim.zkey" \
-    NOMOS_POQ_PROVING_KEY_PATH="/opt/nomos/proofs/poq/src/proving_key/poq.zkey" \
-    NOMOS_ZKSIGN_PROVING_KEY_PATH="/opt/nomos/proofs/zksign/src/proving_key/zksign.zkey"
+# Copy Frontend & Nginx config
+COPY --from=builder /logos-blockchain/testnet/l2-sequencer-archival-demo/webapp/dist /var/www/l2-demo
+COPY --from=builder /logos-blockchain/testnet/l2-sequencer-archival-demo/nginx/nginx.conf /etc/nginx/nginx.conf
 
-ENV NOMOS_PROVER="/opt/nomos/circuits/${PLATFORM}/prover-${VERSION}-${PLATFORM}/prover/prover" \
-    NOMOS_VERIFIER="/opt/nomos/circuits/${PLATFORM}/verifier-${VERSION}-${PLATFORM}/verifier/verifier" \
-    NOMOS_POC="/opt/nomos/circuits/${PLATFORM}/poc-${VERSION}-${PLATFORM}/witness-generator/poc" \
-    NOMOS_POL="/opt/nomos/circuits/${PLATFORM}/pol-${VERSION}-${PLATFORM}/witness-generator/pol" \
-    NOMOS_POQ="/opt/nomos/circuits/${PLATFORM}/poq-${VERSION}-${PLATFORM}/witness-generator/poq" \
-    NOMOS_ZKSIGN="/opt/nomos/circuits/${PLATFORM}/zksign-${VERSION}-${PLATFORM}/witness-generator/zksign"
+# Copy Scripts
+COPY --from=builder /logos-blockchain/testnet/scripts /opt/scripts
 
-EXPOSE 3000 8080 9000 60000
-
-ENTRYPOINT ["/usr/bin/nomos-node"]
+EXPOSE 80 3000 8000 8080 8090 9000 18080 60000
+ENTRYPOINT ["/usr/bin/logos-blockchain-node"]

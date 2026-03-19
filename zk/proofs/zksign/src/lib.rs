@@ -7,13 +7,14 @@ mod witness;
 
 use std::error::Error;
 
-use groth16::{
+pub use inputs::ZkSignWitnessInputs;
+use lb_groth16::{
     CompressedGroth16Proof, Groth16Input, Groth16InputDeser, Groth16Proof, Groth16ProofJsonDeser,
     groth16_batch_verify,
 };
-pub use inputs::ZkSignWitnessInputs;
-pub use private::{PrivateKeysTryFromError, ZkSignPrivateKeysData};
+pub use private::ZkSignPrivateKeysData;
 pub use public::ZkSignVerifierInputs;
+use tracing::error;
 
 use crate::{
     proving_key::ZKSIGN_PROVING_KEY_PATH,
@@ -21,6 +22,12 @@ use crate::{
 };
 
 pub type ZkSignProof = CompressedGroth16Proof;
+
+#[derive(Debug, PartialEq, Eq, thiserror::Error, Clone)]
+pub enum ZkSignError {
+    #[error("ZkSign supports up to 32 keys: got {0}")]
+    TooManyKeys(usize),
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum ProveError {
@@ -59,15 +66,23 @@ pub fn prove(
     inputs: &ZkSignWitnessInputs,
 ) -> Result<(ZkSignProof, ZkSignVerifierInputs), ProveError> {
     let witness = witness::generate_witness(inputs).map_err(ProveError::Io)?;
-    let (proof, verifier_inputs) =
-        circuits_prover::prover_from_contents(ZKSIGN_PROVING_KEY_PATH.as_path(), witness.as_ref())
-            .map_err(ProveError::Io)?;
+    let (proof, verifier_inputs) = lb_circuits_prover::prover_from_contents(
+        ZKSIGN_PROVING_KEY_PATH.as_path(),
+        witness.as_ref(),
+    )
+    .map_err(ProveError::Io)?;
     let proof: Groth16ProofJsonDeser = serde_json::from_slice(&proof).map_err(ProveError::Json)?;
     let verifier_inputs: ZkSignVerifierInputsJson =
         serde_json::from_slice(&verifier_inputs).map_err(ProveError::Json)?;
     let proof: Groth16Proof = proof.try_into().map_err(ProveError::Groth16JsonProof)?;
     Ok((
-        CompressedGroth16Proof::try_from(&proof).unwrap(),
+        CompressedGroth16Proof::try_from(&proof).unwrap_or_else(|e| {
+            error!("Fatal CompressedGroth16Proof::try_from: {e}");
+            // We panic here because this should never happen, and if it does, it's a
+            // critical error that we want to be immediately visible during
+            // development and testing.
+            panic!("Fatal CompressedGroth16Proof::try_from: {e}")
+        }),
         verifier_inputs
             .try_into()
             .map_err(ProveError::VerifierInputsJson)?,
@@ -105,7 +120,7 @@ pub fn verify(
     public_inputs: &ZkSignVerifierInputs,
 ) -> Result<bool, VerifyError> {
     let expanded_proof = Groth16Proof::try_from(proof).map_err(|_| VerifyError::Expansion)?;
-    groth16::groth16_verify(
+    lb_groth16::groth16_verify(
         verification_key::ZKSIGN_VK.as_ref(),
         &expanded_proof,
         &public_inputs.as_inputs(),
@@ -137,9 +152,9 @@ pub fn batch_verify(
 
 #[cfg(test)]
 mod tests {
-    use groth16::Fr;
+    use lb_groth16::Fr;
+    use lb_poseidon2::{Digest as _, Poseidon2Bn254Hasher};
     use num_bigint::BigUint;
-    use poseidon2::{Digest as _, Poseidon2Bn254Hasher};
     use rand::RngCore as _;
 
     use super::*;

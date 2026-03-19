@@ -1,15 +1,15 @@
 use std::io;
 
 use futures::{AsyncReadExt, AsyncWriteExt};
-use nomos_core::codec::{self, SerdeOp};
+use lb_core::codec::{self, DeserializeOp as _, SerializeOp as _};
 use serde::{Serialize, de::DeserializeOwned};
 use thiserror::Error;
 
 type Result<T> = std::result::Result<T, PackingError>;
 
-type LenType = u16;
+type LenType = u32;
 const MAX_MSG_LEN_BYTES: usize = size_of::<LenType>();
-const MAX_MSG_LEN: usize = LenType::MAX as usize;
+const MAX_MSG_LEN: usize = 16 * 1024 * 1024; // 16 MiB;
 
 #[derive(Debug, Error)]
 pub enum PackingError {
@@ -28,7 +28,7 @@ where
     Message: Serialize + DeserializeOwned + Sync,
     Writer: AsyncWriteExt + Send + Unpin,
 {
-    let packed_message = <Message as SerdeOp>::serialize(message)?;
+    let packed_message = message.to_bytes()?;
 
     let length_prefix: LenType =
         packed_message
@@ -64,5 +64,5 @@ where
     let data_length = read_data_length(reader).await?;
     let mut data = vec![0u8; data_length];
     reader.read_exact(&mut data).await?;
-    Ok(<Message as SerdeOp>::deserialize(&data)?)
+    Ok(Message::from_bytes(&data)?)
 }

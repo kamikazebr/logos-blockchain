@@ -1,19 +1,13 @@
-use std::{
-    num::{NonZero, NonZeroU64},
-    ops::Add,
-    time::Duration,
-};
+use std::{num::NonZero, ops::Add, time::Duration};
 
 #[cfg(feature = "serde")]
-use nomos_utils::bounded_duration::{MinimalBoundedDuration, SECOND};
-#[cfg(feature = "serde")]
-use serde_with::serde_as;
+use lb_utils::bounded_duration::{MinimalBoundedDuration, SECOND};
 use time::OffsetDateTime;
 #[cfg(feature = "tokio")]
 use tokio::time::{Interval, MissedTickBehavior};
 
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Clone, Debug, Eq, PartialEq, Copy, Hash, PartialOrd, Ord)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Copy, Hash, PartialOrd, Ord)]
 pub struct Slot(u64);
 
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -25,12 +19,27 @@ impl Epoch {
     pub const fn new(inner: u32) -> Self {
         Self(inner)
     }
+
+    #[must_use]
+    pub const fn into_inner(self) -> u32 {
+        self.0
+    }
+
+    #[must_use]
+    pub const fn saturating_add(self, rhs: Self) -> Self {
+        Self(self.0.saturating_add(rhs.0))
+    }
 }
 
 impl Slot {
     #[must_use]
     pub const fn new(inner: u64) -> Self {
         Self(inner)
+    }
+
+    #[must_use]
+    pub const fn into_inner(self) -> u64 {
+        self.0
     }
 
     #[must_use]
@@ -67,6 +76,11 @@ impl Slot {
                     .expect("slots tick should be at least a second"),
             )
         }
+    }
+
+    #[must_use]
+    pub const fn saturating_sub(self, rhs: Self) -> Self {
+        Self(self.0.saturating_sub(rhs.0))
     }
 }
 
@@ -134,18 +148,14 @@ pub struct EpochConfig {
 }
 
 impl EpochConfig {
-    pub fn epoch_length(&self, base_period_length: NonZero<u64>) -> u64 {
-        [
-            u64::from(NonZeroU64::from(
-                self.epoch_stake_distribution_stabilization,
-            )),
-            u64::from(NonZeroU64::from(self.epoch_period_nonce_buffer)),
-            u64::from(NonZeroU64::from(self.epoch_period_nonce_stabilization)),
-        ]
-        .into_iter()
-        .reduce(u64::saturating_add)
-        .unwrap_or(0)
-        .saturating_mul(base_period_length.get())
+    #[must_use]
+    pub const fn epoch_length(&self, base_period_length: NonZero<u64>) -> u64 {
+        epoch_length(
+            self.epoch_stake_distribution_stabilization,
+            self.epoch_period_nonce_buffer,
+            self.epoch_period_nonce_stabilization,
+            base_period_length,
+        )
     }
 
     #[must_use]
@@ -159,6 +169,19 @@ impl EpochConfig {
     pub fn starting_slot(&self, epoch: &Epoch, base_period_length: NonZero<u64>) -> Slot {
         Slot::from(u64::from(u32::from(*epoch)) * self.epoch_length(base_period_length))
     }
+}
+
+#[must_use]
+pub const fn epoch_length(
+    epoch_stake_distribution_stabilization: NonZero<u8>,
+    epoch_period_nonce_buffer: NonZero<u8>,
+    epoch_period_nonce_stabilization: NonZero<u8>,
+    base_period_length: NonZero<u64>,
+) -> u64 {
+    ((epoch_stake_distribution_stabilization.get() as u64)
+        .saturating_add(epoch_period_nonce_buffer.get() as u64)
+        .saturating_add(epoch_period_nonce_stabilization.get() as u64))
+    .saturating_mul(base_period_length.get())
 }
 
 #[cfg_attr(feature = "serde", cfg_eval::cfg_eval, serde_with::serde_as)]

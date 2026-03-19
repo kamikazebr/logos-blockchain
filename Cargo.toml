@@ -1,57 +1,73 @@
+[workspace.package]
+categories  = ["cryptography", "cryptography::cryptocurrencies", "security"]
+description = "Logos blockchain workspace crates. For more information please visit https://logos.co/."
+edition     = "2024"
+keywords    = ["blockchain", "privacy"]
+license     = "MIT or Apache-2.0"
+readme      = "README.md"
+repository  = "https://github.com/logos-blockchain/logos-blockchain"
+version     = "0.2.1"
+
+[profile.release]
+codegen-units = 1     # (Much) slower build time, much better performances
+lto           = "fat" # Same as above
+strip         = true  # Remove symbols to reduce binary size
+
+[profile.release.package."*"]
+# LTO cannot be overridden for downstream dependencies.
+codegen-units = 1
+opt-level     = 3
+
 [workspace]
 # Make sure any excluded crates are still clipped in our CI. Also, make sure they use the same Clippy and rustc lints we specify in this file down below.
 members = [
+  "blend/core",
+  "blend/crypto",
+  "blend/message",
+  "blend/network",
+  "blend/proofs",
+  "blend/scheduling",
+  "c-bindings",
   "consensus/cryptarchia-engine",
   "consensus/cryptarchia-sync",
-  "ledger/nomos-ledger",
+  "core",
+  "kms/keys",
+  "kms/macros",
+  "kms/operators",
+  "ledger",
+  "libp2p",
   "mmr",
   "nodes/api-common",
-  "nodes/nomos-executor/executor",
-  "nodes/nomos-executor/http-client",
-  "nodes/nomos-node/http-client",
-  "nodes/nomos-node/node",
-  "nomos-blend/message",
-  "nomos-blend/network",
-  "nomos-blend/scheduling",
-  "nomos-bundler",
-  "nomos-c",
-  "nomos-cli",
-  "nomos-core/chain-defs",
-  "nomos-da/kzgrs",
-  "nomos-da/kzgrs-backend",
-  "nomos-da/network/core",
-  "nomos-da/network/messages",
-  "nomos-da/network/subnetworks-assignations",
-  "nomos-libp2p",
-  "nomos-membership",
-  "nomos-services/api",
-  "nomos-services/blend",
-  "nomos-services/chain/broadcast-service",
-  "nomos-services/chain/chain-common",
-  "nomos-services/chain/chain-leader",
-  "nomos-services/chain/chain-service",
-  "nomos-services/data-availability/dispersal",
-  "nomos-services/data-availability/network",
-  "nomos-services/data-availability/sampling",
-  "nomos-services/data-availability/verifier",
-  "nomos-services/key-management-system",
-  "nomos-services/key-management-system-macros",
-  "nomos-services/membership",
-  "nomos-services/network",
-  "nomos-services/sdp",
-  "nomos-services/storage",
-  "nomos-services/system-sig",
-  "nomos-services/time",
-  "nomos-services/tracing",
-  "nomos-services/tx-service",
-  "nomos-services/utils",
-  "nomos-services/wallet",
-  "nomos-tracing",
-  "nomos-utils",
+  "nodes/node/binary",
+  "nodes/node/http-client",
+  "services/api",
+  "services/blend",
+  "services/chain/broadcast-service",
+  "services/chain/chain-common",
+  "services/chain/chain-leader",
+  "services/chain/chain-network",
+  "services/chain/chain-service",
+  "services/key-management-system",
+  "services/network",
+  "services/sdp",
+  "services/storage",
+  "services/system-sig",
+  "services/time",
+  "services/tracing",
+  "services/tx-service",
+  "services/utils",
+  "services/wallet",
   "testnet/cfgsync",
+  "testnet/faucet",
+  "testnet/l2-sequencer-archival-demo/archiver",
+  "testnet/l2-sequencer-archival-demo/sequencer",
   "tests",
+  "tests/testing_framework",
+  "tracing",
+  "utils",
   "utxotree",
   "wallet",
+  "wallet-http-client",
   "zk/circuits/prover",
   "zk/circuits/utils",
   "zk/circuits/verifier",
@@ -62,96 +78,114 @@ members = [
   "zk/proofs/pol",
   "zk/proofs/poq",
   "zk/proofs/zksign",
+  "zone-sdk",
 ]
 resolver = "2"
 
 [workspace.dependencies]
 # Internal
-broadcast-service            = { default-features = false, path = "./nomos-services/chain/broadcast-service" }
-bundler                      = { default-features = false, path = "./nomos-bundler" }
-cfgsync                      = { default-features = false, path = "./testnet/cfgsync" }
-chain-common                 = { default-features = false, path = "./nomos-services/chain/chain-common" }
-chain-leader                 = { default-features = false, path = "./nomos-services/chain/chain-leader" }
-chain-service                = { default-features = false, path = "./nomos-services/chain/chain-service" }
-circuits-prover              = { default-features = false, path = "./zk/circuits/prover" }
-circuits-utils               = { default-features = false, path = "./zk/circuits/utils" }
-circuits-verifier            = { default-features = false, path = "./zk/circuits/verifier" }
-common-http-client           = { default-features = false, path = "./nodes/nomos-node/http-client" }
-cryptarchia-engine           = { default-features = false, path = "./consensus/cryptarchia-engine" }
-cryptarchia-sync             = { default-features = false, path = "./consensus/cryptarchia-sync" }
-executor-http-client         = { default-features = false, path = "./nodes/nomos-executor/http-client" }
-groth16                      = { default-features = false, path = "./zk/groth16" }
-key-management-system        = { default-features = false, path = "./nomos-services/key-management-system" }
-key-management-system-macros = { default-features = false, path = "./nomos-services/key-management-system-macros" }
-kzgrs                        = { default-features = false, path = "./nomos-da/kzgrs" }
-kzgrs-backend                = { default-features = false, path = "./nomos-da/kzgrs-backend" }
-mmr                          = { default-features = false, path = "./mmr" }
-nomos-api                    = { default-features = false, path = "./nomos-services/api" }
-nomos-blend-message          = { default-features = false, path = "./nomos-blend/message" }
-nomos-blend-network          = { default-features = false, path = "./nomos-blend/network" }
-nomos-blend-scheduling       = { default-features = false, path = "./nomos-blend/scheduling" }
-nomos-blend-service          = { default-features = false, path = "./nomos-services/blend" }
-nomos-cli                    = { default-features = false, path = "./nomos-cli" }
-nomos-core                   = { default-features = false, path = "./nomos-core/chain-defs" }
-nomos-da-dispersal           = { default-features = false, path = "./nomos-services/data-availability/dispersal" }
-nomos-da-messages            = { default-features = false, path = "./nomos-da/network/messages" }
-nomos-da-network-core        = { default-features = false, path = "./nomos-da/network/core" }
-nomos-da-network-service     = { default-features = false, path = "./nomos-services/data-availability/network" }
-nomos-da-sampling            = { default-features = false, path = "./nomos-services/data-availability/sampling" }
-nomos-da-verifier            = { default-features = false, path = "./nomos-services/data-availability/verifier" }
-nomos-executor               = { default-features = false, path = "./nodes/nomos-executor/executor" }
-nomos-http-api-common        = { default-features = false, path = "./nodes/api-common" }
-nomos-ledger                 = { default-features = false, path = "./ledger/nomos-ledger" }
-nomos-libp2p                 = { default-features = false, path = "./nomos-libp2p" }
-nomos-mantle-core            = { default-features = false, path = "./nomos-mantle" }
-nomos-membership             = { default-features = false, path = "./nomos-membership" }
-nomos-membership-service     = { default-features = false, path = "./nomos-services/membership" }
-nomos-network                = { default-features = false, path = "./nomos-services/network" }
-nomos-node                   = { default-features = false, path = "./nodes/nomos-node/node" }
-nomos-sdp                    = { default-features = false, path = "./nomos-services/sdp" }
-nomos-storage                = { default-features = false, path = "./nomos-services/storage" }
-nomos-system-sig             = { default-features = false, path = "./nomos-services/system-sig" }
-nomos-time                   = { default-features = false, path = "./nomos-services/time" }
-nomos-tracing                = { default-features = false, path = "./nomos-tracing" }
-nomos-tracing-service        = { default-features = false, path = "./nomos-services/tracing" }
-nomos-utils                  = { default-features = false, path = "./nomos-utils" }
-nomos-wallet                 = { default-features = false, path = "./nomos-services/wallet" }
-poc                          = { default-features = false, path = "./zk/proofs/poc" }
-pol                          = { default-features = false, path = "./zk/proofs/pol" }
-poq                          = { default-features = false, path = "zk/proofs/poq" }
-poseidon2                    = { default-features = false, path = "./zk/poseidon2" }
-services-utils               = { default-features = false, path = "./nomos-services/utils" }
-subnetworks-assignations     = { default-features = false, path = "./nomos-da/network/subnetworks-assignations" }
-tests                        = { default-features = false, path = "./tests" }
-tx-service                   = { default-features = false, path = "./nomos-services/tx-service" }
-utxotree                     = { default-features = false, path = "./utxotree" }
-wallet                       = { default-features = false, path = "./wallet" }
-witness-generator            = { default-features = false, path = "zk/circuits/witness-generator" }
-zeroize                      = { default-features = false, features = ["zeroize_derive"], version = "1" }
-zksign                       = { default-features = false, path = "./zk/proofs/zksign" }
+common-http-client                 = { default-features = false, package = "logos-blockchain-common-http-client", path = "./nodes/node/http-client" }
+lb-api-service                     = { default-features = false, package = "logos-blockchain-api-service", path = "./services/api" }
+lb-blend                           = { default-features = false, package = "logos-blockchain-blend", path = "./blend/core" }
+lb-blend-crypto                    = { default-features = false, package = "logos-blockchain-blend-crypto", path = "./blend/crypto" }
+lb-blend-message                   = { default-features = false, package = "logos-blockchain-blend-message", path = "./blend/message" }
+lb-blend-network                   = { default-features = false, package = "logos-blockchain-blend-network", path = "./blend/network" }
+lb-blend-proofs                    = { default-features = false, package = "logos-blockchain-blend-proofs", path = "./blend/proofs" }
+lb-blend-scheduling                = { default-features = false, package = "logos-blockchain-blend-scheduling", path = "./blend/scheduling" }
+lb-blend-service                   = { default-features = false, package = "logos-blockchain-blend-service", path = "./services/blend" }
+lb-cfgsync                         = { default-features = false, package = "logos-blockchain-cfgsync", path = "./testnet/cfgsync" }
+lb-chain-broadcast-service         = { default-features = false, package = "logos-blockchain-chain-broadcast-service", path = "./services/chain/broadcast-service" }
+lb-chain-leader-service            = { default-features = false, package = "logos-blockchain-chain-leader-service", path = "./services/chain/chain-leader" }
+lb-chain-network-service           = { default-features = false, package = "logos-blockchain-chain-network-service", path = "./services/chain/chain-network" }
+lb-chain-service                   = { default-features = false, package = "logos-blockchain-chain-service", path = "./services/chain/chain-service" }
+lb-chain-service-common            = { default-features = false, package = "logos-blockchain-chain-service-common", path = "./services/chain/chain-common" }
+lb-circuits-prover                 = { default-features = false, package = "logos-blockchain-circuits-prover", path = "./zk/circuits/prover" }
+lb-circuits-utils                  = { default-features = false, package = "logos-blockchain-circuits-utils", path = "./zk/circuits/utils" }
+lb-circuits-verifier               = { default-features = false, package = "logos-blockchain-circuits-verifier", path = "./zk/circuits/verifier" }
+lb-common-http-client              = { default-features = false, package = "logos-blockchain-common-http-client", path = "./nodes/node/http-client" }
+lb-core                            = { default-features = false, package = "logos-blockchain-core", path = "./core" }
+lb-cryptarchia-engine              = { default-features = false, package = "logos-blockchain-cryptarchia-engine", path = "./consensus/cryptarchia-engine" }
+lb-cryptarchia-sync                = { default-features = false, package = "logos-blockchain-cryptarchia-sync", path = "./consensus/cryptarchia-sync" }
+lb-demo-archiver                   = { default-features = false, package = "logos-blockchain-demo-archiver", path = "./testnet/l2-sequencer-archival-demo/archiver" }
+lb-demo-sequencer                  = { default-features = false, package = "logos-blockchain-demo-sequencer", path = "./testnet/l2-sequencer-archival-demo/sequencer" }
+lb-groth16                         = { default-features = false, package = "logos-blockchain-groth16", path = "./zk/groth16" }
+lb-http-api-common                 = { default-features = false, package = "logos-blockchain-http-api-common", path = "./nodes/api-common" }
+lb-key-management-system-keys      = { default-features = false, package = "logos-blockchain-key-management-system-keys", path = "./kms/keys" }
+lb-key-management-system-macros    = { default-features = false, package = "logos-blockchain-key-management-system-macros", path = "./kms/macros" }
+lb-key-management-system-operators = { default-features = false, package = "logos-blockchain-key-management-system-operators", path = "./kms/operators" }
+lb-key-management-system-service   = { default-features = false, package = "logos-blockchain-key-management-system-service", path = "./services/key-management-system" }
+lb-ledger                          = { default-features = false, package = "logos-blockchain-ledger", path = "./ledger" }
+lb-libp2p                          = { default-features = false, package = "logos-blockchain-libp2p", path = "./libp2p" }
+lb-mmr                             = { default-features = false, package = "logos-blockchain-mmr", path = "./mmr" }
+lb-network-service                 = { default-features = false, package = "logos-blockchain-network-service", path = "./services/network" }
+lb-node                            = { default-features = false, package = "logos-blockchain-node", path = "./nodes/node/binary" }
+lb-poc                             = { default-features = false, package = "logos-blockchain-poc", path = "./zk/proofs/poc" }
+lb-pol                             = { default-features = false, package = "logos-blockchain-pol", path = "./zk/proofs/pol" }
+lb-poq                             = { default-features = false, package = "logos-blockchain-poq", path = "./zk/proofs/poq" }
+lb-poseidon2                       = { default-features = false, package = "logos-blockchain-poseidon2", path = "./zk/poseidon2" }
+lb-sdp-service                     = { default-features = false, package = "logos-blockchain-sdp-service", path = "./services/sdp" }
+lb-services-utils                  = { default-features = false, package = "logos-blockchain-services-utils", path = "./services/utils" }
+lb-storage-service                 = { default-features = false, package = "logos-blockchain-storage-service", path = "./services/storage" }
+lb-system-sig-service              = { default-features = false, package = "logos-blockchain-system-sig-service", path = "./services/system-sig" }
+lb-testing-framework               = { default-features = false, package = "testing_framework", path = "./tests/testing_framework" }
+lb-tests                           = { default-features = false, package = "logos-blockchain-tests", path = "./tests" }
+lb-time-service                    = { default-features = false, package = "logos-blockchain-time-service", path = "./services/time" }
+lb-tracing                         = { default-features = false, package = "logos-blockchain-tracing", path = "./tracing" }
+lb-tracing-service                 = { default-features = false, package = "logos-blockchain-tracing-service", path = "./services/tracing" }
+lb-tx-service                      = { default-features = false, package = "logos-blockchain-tx-service", path = "./services/tx-service" }
+lb-utils                           = { default-features = false, package = "logos-blockchain-utils", path = "./utils" }
+lb-utxotree                        = { default-features = false, package = "logos-blockchain-utxotree", path = "./utxotree" }
+lb-wallet                          = { default-features = false, package = "logos-blockchain-wallet", path = "./wallet" }
+lb-wallet-http-client              = { default-features = false, package = "logos-blockchain-wallet-http-client", path = "./wallet-http-client" }
+lb-wallet-service                  = { default-features = false, package = "logos-blockchain-wallet-service", path = "./services/wallet" }
+lb-witness-generator               = { default-features = false, package = "logos-blockchain-witness-generator", path = "./zk/circuits/witness-generator" }
+lb-zksign                          = { default-features = false, package = "logos-blockchain-zksign", path = "./zk/proofs/zksign" }
+lb-zone-sdk                        = { default-features = false, package = "logos-blockchain-zone-sdk", path = "./zone-sdk" }
+lb_network                         = { default-features = false, package = "logos-blockchain-network-service", path = "./services/network" }
+testing-framework-core             = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", tag = "tagged_ref_05" }
+testing-framework-env              = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", tag = "tagged_ref_05" }
+testing-framework-runner-local     = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", tag = "tagged_ref_05" }
 
 # External
+async-trait       = { default-features = false, version = "0.1" }
 blake2            = { default-features = false, version = "0.10" }
 bytes             = { default-features = false, version = "1.3" }
 cached            = { default-features = false, version = "0.55.1" }
+cfg-if            = { default-features = false, version = "1.0.4" }
+ed25519-dalek     = { default-features = false, version = "2" }
 fork_stream       = { default-features = false, version = "0.1.0" }
+hex               = { default-features = false, version = "0.4" }
 libp2p            = { default-features = false, version = "0.55" }
 libp2p-stream     = { default-features = false, version = "0.3.0-alpha" }
-overwatch         = { default-features = false, git = "https://github.com/logos-co/Overwatch", rev = "f5a9902" }
-overwatch-derive  = { default-features = false, git = "https://github.com/logos-co/Overwatch", rev = "f5a9902" }
+log               = { default-features = false, version = "0.4" }
+overwatch         = { default-features = false, git = "https://github.com/logos-co/Overwatch", rev = "448c192" }
+overwatch-derive  = { default-features = false, git = "https://github.com/logos-co/Overwatch", rev = "448c192" }
 rand              = { default-features = false, version = "0.8" }
 reqwest           = { default-features = false, version = "0.12" }
+serde             = { default-features = false, version = "1.0" }
+serde-big-array   = { default-features = false, version = "0.5" }
+serde_ignored     = { default-features = false, version = "0.1" }
 serde_json        = { default-features = false, version = "1.0" }
 serde_with        = { default-features = false, version = "3.14.0" }
 serde_yaml        = { default-features = false, version = "0.9.33" }
+subtle            = { default-features = false, version = "2.6.1" }
 tempfile          = { default-features = false, version = "3" }
 thiserror         = { default-features = false, version = "2.0" }
+time              = { default-features = false, version = "0.3" }
 tokio             = { default-features = false, version = "1" }
 tracing           = { default-features = false, version = "0.1" }
 utoipa            = { default-features = false, version = "4.0" }
 utoipa-swagger-ui = { default-features = false, version = "7.0" }
+x25519-dalek      = { default-features = false, version = "2" }
+zeroize           = { default-features = false, version = "1" }
 
 [workspace.lints.clippy]
+
+# Cargo and allowed cargo warnings (new lints will warn by default)
+cargo = { level = "warn", priority = -1 }
+
+# TODO: We should tackle this lint at some point, to reduce dependencies duplication, reduce compilation times and bring down our binary size.
+multiple_crate_versions = { level = "allow" }
 
 # Nursery and allowed nursery warnings (new lints will warn by default)
 nursery = { level = "warn", priority = -1 }
@@ -216,41 +250,41 @@ unseparated_literal_suffix        = { level = "allow" }
 use_debug                         = { level = "allow" }
 wildcard_enum_match_arm           = { level = "allow" }
 
-# TODO: Address these allow-by-default lints at some point by either allowing them permanently or enforce them, and move them to the relative section according to the decision.
-# When doing so, please update the same table for all crates that are not part of the workspace.
-arithmetic_side_effects     = { level = "allow" }
-as_conversions              = { level = "allow" }
-as_pointer_underscore       = { level = "allow" }
-as_underscore               = { level = "allow" }
-assertions_on_result_states = { level = "allow" }
-cast_possible_truncation    = { level = "allow" }
-cast_possible_wrap          = { level = "allow" }
-cast_precision_loss         = { level = "allow" }
-cast_sign_loss              = { level = "allow" }
-doc_broken_link             = { level = "allow" }
-error_impl_error            = { level = "allow" }
-impl_trait_in_params        = { level = "allow" }
-indexing_slicing            = { level = "allow" }
-infinite_loop               = { level = "allow" }
-integer_division            = { level = "allow" }
-large_stack_frames          = { level = "allow" }
-missing_assert_message      = { level = "allow" }
-missing_errors_doc          = { level = "allow" }
-missing_panics_doc          = { level = "allow" }
-pattern_type_mismatch       = { level = "allow" }
-redundant_test_prefix       = { level = "allow" }
-ref_patterns                = { level = "allow" }
-renamed_function_params     = { level = "allow" }
-same_name_method            = { level = "allow" }
-shadow_reuse                = { level = "allow" }
-shadow_same                 = { level = "allow" }
-shadow_unrelated            = { level = "allow" }
-tests_outside_test_module   = { level = "allow" }
-todo                        = { level = "allow" }
-unimplemented               = { level = "allow" }
-unreachable                 = { level = "allow" }
-unwrap_in_result            = { level = "allow" }
-unwrap_used                 = { level = "allow" }
+# TODO: Address these lints at some point. To allow them, move them to the section where they belong (e.g., pedantic), and keep allowing them. To enforce them, since all lints are "warn" by default, just remove them from this list.
+arithmetic_side_effects            = { level = "allow" }
+as_conversions                     = { level = "allow" }
+as_pointer_underscore              = { level = "allow" }
+as_underscore                      = { level = "allow" }
+assertions_on_result_states        = { level = "allow" }
+cast_possible_truncation           = { level = "allow" }
+cast_possible_wrap                 = { level = "allow" }
+cast_precision_loss                = { level = "allow" }
+cast_sign_loss                     = { level = "allow" }
+doc_paragraphs_missing_punctuation = { level = "allow" }
+error_impl_error                   = { level = "allow" }
+impl_trait_in_params               = { level = "allow" }
+indexing_slicing                   = { level = "allow" }
+infinite_loop                      = { level = "allow" }
+integer_division                   = { level = "allow" }
+large_stack_frames                 = { level = "allow" }
+missing_assert_message             = { level = "allow" }
+missing_errors_doc                 = { level = "allow" }
+missing_panics_doc                 = { level = "allow" }
+pattern_type_mismatch              = { level = "allow" }
+redundant_test_prefix              = { level = "allow" }
+ref_patterns                       = { level = "allow" }
+renamed_function_params            = { level = "allow" }
+same_name_method                   = { level = "allow" }
+shadow_reuse                       = { level = "allow" }
+shadow_same                        = { level = "allow" }
+shadow_unrelated                   = { level = "allow" }
+tests_outside_test_module          = { level = "allow" }
+todo                               = { level = "allow" }
+unchecked_time_subtraction         = { level = "allow" }
+unimplemented                      = { level = "allow" }
+unreachable                        = { level = "allow" }
+unwrap_in_result                   = { level = "allow" }
+unwrap_used                        = { level = "allow" }
 
 [workspace.lints.rust]
 
@@ -260,12 +294,19 @@ unused_crate_dependencies = { level = "allow" } # Too many false positives espec
 unused_results            = { level = "allow" } # We have Clippy lints to warn on unused `must_use` results. This is too pedantic as it complains on EVERY unused result.
 
 # Lints which are allow-by-default but have been changed to "warn"
+ambiguous_negative_literals   = { level = "warn" }
+closure_returning_async_block = { level = "warn" }
+deref_into_dyn_supertrait     = { level = "warn" }
 impl_trait_redundant_captures = { level = "warn" }
+let_underscore_drop           = { level = "warn" }
+macro_use_extern_crate        = { level = "warn" }
 missing_unsafe_on_extern      = { level = "warn" }
 redundant_imports             = { level = "warn" }
 redundant_lifetimes           = { level = "warn" }
 single_use_lifetimes          = { level = "warn" }
+tail_expr_drop_order          = { level = "warn" }
 trivial_numeric_casts         = { level = "warn" }
+unit_bindings                 = { level = "warn" }
 unsafe_attr_outside_unsafe    = { level = "warn" }
 unsafe_op_in_unsafe_fn        = { level = "warn" }
 unstable_features             = { level = "warn" }
@@ -275,28 +316,16 @@ unused_lifetimes              = { level = "warn" }
 unused_macro_rules            = { level = "warn" }
 unused_qualifications         = { level = "warn" }
 
-# TODO: Address these allow-by-default Rustc lints at some point by either allowing them permanently or enforce them, and move them to the relative section according to the decision.
-# When doing so, please update the same table for all crates that are not part of the workspace.
+# TODO: Address these allow-by-default Rustc lints at some point. To allow them, move them to the list of explicitly allowed lints. To enforce them, move them to the list of explicitly warned ones.
 absolute_paths_not_starting_with_crate = { level = "allow" }
-ambiguous_negative_literals            = { level = "allow" }
-closure_returning_async_block          = { level = "allow" }
-deref_into_dyn_supertrait              = { level = "allow" }
 elided_lifetimes_in_paths              = { level = "allow" }
 ffi_unwind_calls                       = { level = "allow" }
 impl_trait_overcaptures                = { level = "allow" }
-let_underscore_drop                    = { level = "allow" }
 linker_messages                        = { level = "allow" }
-macro_use_extern_crate                 = { level = "allow" }
 missing_copy_implementations           = { level = "allow" }
 missing_debug_implementations          = { level = "allow" }
 missing_docs                           = { level = "allow" }
-tail_expr_drop_order                   = { level = "allow" }
 trivial_casts                          = { level = "allow" }
-unit_bindings                          = { level = "allow" }
 unreachable_pub                        = { level = "allow" }
 unsafe_code                            = { level = "allow" }
 variant_size_differences               = { level = "allow" }
-
-[workspace.package]
-edition = "2024"
-license = "MIT or Apache-2.0"

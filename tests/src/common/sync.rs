@@ -1,21 +1,21 @@
 use std::time::Duration;
 
-use chain_service::CryptarchiaInfo;
 use futures_util::{StreamExt as _, stream};
+use lb_chain_service::CryptarchiaInfo;
 use tokio::time::timeout;
 
 use crate::nodes::validator::Validator;
 
 pub async fn wait_for_validators_mode_and_height(
     validators: &[Validator],
-    mode: cryptarchia_engine::State,
+    mode: lb_cryptarchia_engine::State,
     min_height: u64,
     timeout_duration: Duration,
 ) {
     timeout(timeout_duration, async {
         loop {
             let infos: Vec<_> = stream::iter(validators)
-                .then(|n| async move { n.consensus_info().await })
+                .then(async |n| { n.consensus_info(false).await })
                 .collect()
                 .await;
             print_validators_info(&infos);
@@ -40,13 +40,13 @@ pub async fn wait_for_validators_mode_and_height(
 
 pub async fn wait_for_validators_mode(
     validators: &[&Validator],
-    mode: cryptarchia_engine::State,
+    mode: lb_cryptarchia_engine::State,
     timeout_duration: Duration,
 ) {
     timeout(timeout_duration, async {
         loop {
             let infos: Vec<_> = stream::iter(validators)
-                .then(|n| async move { n.consensus_info().await })
+                .then(async |n| n.consensus_info(false).await)
                 .collect()
                 .await;
             print_validators_info(&infos);
@@ -66,11 +66,13 @@ pub async fn wait_for_validators_mode(
 }
 
 fn print_validators_info(infos: &[CryptarchiaInfo]) {
-    println!(
-        "   Validators: {:?}",
-        infos
-            .iter()
-            .map(|info| format!("{:?}/{:?}", info.height, info.mode))
-            .collect::<Vec<_>>(),
-    );
+    println!("   Validators: {:?}", format_cryptarhica_info(infos));
+}
+
+#[must_use]
+pub fn format_cryptarhica_info(infos: &[CryptarchiaInfo]) -> Vec<String> {
+    infos
+        .iter()
+        .map(|info| format!("Height({})/{:?}/{:?}", info.height, info.slot, info.mode))
+        .collect()
 }

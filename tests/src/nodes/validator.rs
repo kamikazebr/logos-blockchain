@@ -1,81 +1,49 @@
 use std::{
-    collections::HashSet,
+    ffi::OsStr,
     net::SocketAddr,
-    num::{NonZeroU64, NonZeroUsize},
-    path::PathBuf,
     process::{Child, Command, Stdio},
     str::FromStr as _,
     time::Duration,
 };
 
-use broadcast_service::BlockInfo;
-use chain_leader::LeaderSettings;
-use chain_service::{CryptarchiaInfo, CryptarchiaSettings, OrphanConfig, SyncConfig};
-use common_http_client::CommonHttpClient;
-use cryptarchia_engine::time::SlotConfig;
 use futures::Stream;
-use kzgrs_backend::common::share::{DaLightShare, DaShare, DaSharesCommitments};
-use nomos_api::http::membership::MembershipUpdateRequest;
-use nomos_blend_scheduling::message_blend::SessionCryptographicProcessorSettings;
-use nomos_blend_service::{
-    core::settings::{CoverTrafficSettingsExt, MessageDelayerSettingsExt, SchedulerSettingsExt},
-    settings::TimingSettings,
+use lb_chain_broadcast_service::BlockInfo;
+use lb_chain_service::CryptarchiaInfo;
+use lb_common_http_client::CommonHttpClient;
+use lb_core::{
+    block::Block,
+    mantle::{SignedMantleTx, Transaction as _, TxHash},
+    sdp::Declaration,
 };
-use nomos_core::{
-    block::{Block, SessionNumber},
-    da::BlobId,
-    mantle::SignedMantleTx,
-    sdp::FinalizedBlockEvent,
+use lb_http_api_common::paths::{
+    CRYPTARCHIA_HEADERS, CRYPTARCHIA_INFO, MANTLE_SDP_DECLARATIONS, NETWORK_INFO, STORAGE_BLOCK,
 };
-use nomos_da_network_core::{
-    protocols::sampling::SubnetsConfig,
-    swarm::{BalancerStats, DAConnectionPolicySettings, MonitorStats},
+use lb_key_management_system_service::keys::secured_key::SecuredKey as _;
+use lb_network_service::backends::libp2p::Libp2pInfo;
+use lb_node::{
+    HeaderId, UserConfig,
+    config::{
+        ApiConfig, CryptarchiaConfig, RunConfig, SdpConfig, StorageConfig, WalletConfig,
+        api::serde::AxumBackendSettings,
+        cryptarchia::serde::RequiredValues as CryptarchiaConfigRequiredValues,
+        deployment::DeploymentSettings, sdp::serde::RequiredValues as SdpConfigRequiredValues,
+        state::Config as StateConfig, tracing::serde as tracing,
+        wallet::serde::RequiredValues as WalletConfigRequiredValues,
+    },
 };
-use nomos_da_network_service::{
-    NetworkConfig as DaNetworkConfig, api::http::ApiAdapterSettings,
-    backends::libp2p::common::DaNetworkBackendSettings,
-};
-use nomos_da_sampling::{
-    DaSamplingServiceSettings, backend::kzgrs::KzgrsSamplingBackendSettings,
-    verifier::kzgrs::KzgrsDaVerifierSettings as SamplingVerifierSettings,
-};
-use nomos_da_verifier::{
-    DaVerifierServiceSettings,
-    backend::{kzgrs::KzgrsDaVerifierSettings, trigger::MempoolPublishTriggerConfig},
-    storage::adapters::rocksdb::RocksAdapterSettings as VerifierStorageAdapterSettings,
-};
-use nomos_http_api_common::paths::{
-    CRYPTARCHIA_HEADERS, CRYPTARCHIA_INFO, DA_BALANCER_STATS, DA_GET_SHARES_COMMITMENTS,
-    DA_HISTORIC_SAMPLING, DA_MONITOR_STATS, STORAGE_BLOCK, UPDATE_MEMBERSHIP,
-};
-use nomos_network::{backends::libp2p::Libp2pConfig, config::NetworkConfig};
-use nomos_node::{
-    Config, HeaderId, RocksBackendSettings,
-    api::{backend::AxumBackendSettings, testing::handlers::HistoricSamplingRequest},
-    config::{blend::BlendConfig, mempool::MempoolConfig},
-};
-use nomos_time::{
-    TimeServiceSettings,
-    backends::{NtpTimeBackendSettings, ntp::async_client::NTPClientSettings},
-};
-use nomos_tracing::logging::local::FileConfig;
-use nomos_tracing_service::LoggerLayer;
-use nomos_utils::{math::NonNegativeF64, net::get_available_tcp_port};
-use nomos_wallet::WalletServiceSettings;
+use lb_tx_service::MempoolMetrics;
+use lb_utils::net::get_available_tcp_port;
 use reqwest::Url;
 use tempfile::NamedTempFile;
 use tokio::time::error::Elapsed;
-use tx_service::MempoolMetrics;
 
-use super::{CLIENT, create_tempdir, persist_tempdir};
+use super::{CLIENT, create_tempdir, get_exe_path, persist_tempdir};
 use crate::{
-    IS_DEBUG_TRACING, adjust_timeout, nodes::LOGS_PREFIX, topology::configs::GeneralConfig,
+    IS_DEBUG_TRACING, common::kms::key_id_for_preload_backend, nodes::LOGS_PREFIX,
+    topology::configs::GeneralConfig,
 };
 
-const BIN_PATH: &str = "../target/debug/nomos-node";
-
 pub enum Pool {
-    Da,
     Mantle,
 }
 
@@ -84,13 +52,15 @@ pub struct Validator {
     testing_http_addr: SocketAddr,
     tempdir: tempfile::TempDir,
     child: Child,
-    config: Config,
+    config: RunConfig,
     http_client: CommonHttpClient,
 }
 
 impl Drop for Validator {
     fn drop(&mut self) {
-        if let Err(e) = persist_tempdir(&mut self.tempdir, "nomos-node") {
+        if std::thread::panicking()
+            && let Err(e) = persist_tempdir(&mut self.tempdir, "logos-blockchain-node")
+        {
             println!("failed to persist tempdir: {e}");
         }
 
@@ -124,44 +94,130 @@ impl Validator {
         .is_ok()
     }
 
-    pub async fn spawn(mut config: Config) -> Result<Self, Elapsed> {
+    /// Kill the validator process.
+    pub fn kill(&mut self) -> std::io::Result<()> {
+        self.child.kill()
+    }
+
+    /// Restart the validator process using the same config and state directory.
+    /// This preserves persisted state (like SDP nonces fetched from ledger).
+    pub async fn restart(&mut self) -> Result<(), Elapsed> {
+        // Kill the current process
+        drop(self.child.kill());
+        self.wait_for_exit(Duration::from_secs(5)).await;
+
+        // Re-write config files (they were temporary and may have been cleaned up)
+        let mut user_config_file = NamedTempFile::new().unwrap();
+        let mut deployment_config_file = NamedTempFile::new().unwrap();
+
+        serde_yaml::to_writer(&mut user_config_file, &self.config.user).unwrap();
+        serde_yaml::to_writer(&mut deployment_config_file, &self.config.deployment).unwrap();
+
+        // Spawn new process with same config
+        let exe_path = get_exe_path();
+        self.child = Command::new(exe_path)
+            .arg("--deployment")
+            .arg(deployment_config_file.path().as_os_str())
+            .arg(user_config_file.path().as_os_str())
+            .current_dir(self.tempdir.path())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .unwrap();
+
+        // Wait for the node to come online
+        tokio::time::timeout(Duration::from_secs(10), async {
+            self.wait_online().await;
+        })
+        .await?;
+
+        Ok(())
+    }
+
+    /// Restarts with the same deployment and user configs, but attaches
+    /// provided cli arguments.
+    pub async fn restart_with_args<I, S>(&mut self, args: I) -> Result<(), Elapsed>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        drop(self.child.kill());
+        self.wait_for_exit(Duration::from_secs(5)).await;
+
+        // Re-write config files (they were temporary and may have been cleaned up)
+        let mut user_config_file = NamedTempFile::new().unwrap();
+        let mut deployment_config_file = NamedTempFile::new().unwrap();
+
+        serde_yaml::to_writer(&mut user_config_file, &self.config.user).unwrap();
+        serde_yaml::to_writer(&mut deployment_config_file, &self.config.deployment).unwrap();
+
+        // Spawn new process with same config
+        let exe_path = get_exe_path();
+        self.child = Command::new(exe_path)
+            .arg("--deployment")
+            .arg(deployment_config_file.path().as_os_str())
+            .args(args)
+            .arg(user_config_file.path().as_os_str())
+            .current_dir(self.tempdir.path())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .unwrap();
+
+        // Wait for the node to come online
+        tokio::time::timeout(Duration::from_secs(10), async {
+            self.wait_online().await;
+        })
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn spawn(mut config: RunConfig) -> Result<Self, Elapsed> {
         let dir = create_tempdir().unwrap();
-        let mut file = NamedTempFile::new().unwrap();
-        let config_path = file.path().to_owned();
+        let mut user_config_file = NamedTempFile::new().unwrap();
+        let mut deployment_config_file = NamedTempFile::new().unwrap();
 
         if !*IS_DEBUG_TRACING {
             // setup logging so that we can intercept it later in testing
-            config.tracing.logger = LoggerLayer::File(FileConfig {
-                directory: dir.path().to_owned(),
-                prefix: Some(LOGS_PREFIX.into()),
-            });
+            config.user.tracing.logger = tracing::logger::Layers {
+                file: Some(tracing::logger::FileConfig {
+                    directory: dir.path().to_owned(),
+                    prefix: Some(LOGS_PREFIX.into()),
+                }),
+                loki: None,
+                gelf: None,
+                otlp: None,
+                stdout: false,
+                stderr: false,
+            };
         }
 
-        config.storage.db_path = dir.path().join("db");
-        dir.path().clone_into(
-            &mut config
-                .da_verifier
-                .storage_adapter_settings
-                .blob_storage_directory,
-        );
+        config.user.state.base_folder = dir.path().to_path_buf();
+        "db".clone_into(&mut config.user.storage.backend.folder_name);
 
-        serde_yaml::to_writer(&mut file, &config).unwrap();
-        let child = Command::new(std::env::current_dir().unwrap().join(BIN_PATH))
-            .arg(&config_path)
+        serde_yaml::to_writer(&mut user_config_file, &config.user).unwrap();
+        serde_yaml::to_writer(&mut deployment_config_file, &config.deployment).unwrap();
+        let exe_path = get_exe_path();
+        let child = Command::new(exe_path)
+            .arg("--deployment")
+            .arg(deployment_config_file.path().as_os_str())
+            .arg(user_config_file.path().as_os_str())
             .current_dir(dir.path())
             .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
             .spawn()
             .unwrap();
         let node = Self {
-            addr: config.http.backend_settings.address,
-            testing_http_addr: config.testing_http.backend_settings.address,
+            addr: config.user.api.backend.listen_address,
+            testing_http_addr: config.user.api.testing.listen_address,
             child,
             tempdir: dir,
             config,
             http_client: CommonHttpClient::new_with_client(CLIENT.clone(), None),
         };
 
-        tokio::time::timeout(adjust_timeout(Duration::from_secs(10)), async {
+        tokio::time::timeout(Duration::from_secs(10), async {
             node.wait_online().await;
         })
         .await?;
@@ -191,6 +247,21 @@ impl Validator {
         }
     }
 
+    pub async fn wait_for_height(&self, target_height: u64, duration: Duration) -> Option<()> {
+        tokio::time::timeout(duration, async {
+            loop {
+                let info = self.consensus_info(false).await;
+                println!("{info:?}");
+                if info.height >= target_height {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+        })
+        .await
+        .ok()
+    }
+
     pub async fn get_block(&self, id: HeaderId) -> Option<Block<SignedMantleTx>> {
         CLIENT
             .post(format!("http://{}{}", self.addr, STORAGE_BLOCK))
@@ -204,23 +275,9 @@ impl Validator {
             .unwrap()
     }
 
-    pub async fn get_commitments(&self, blob_id: BlobId) -> Option<DaSharesCommitments> {
-        CLIENT
-            .post(format!("http://{}{}", self.addr, DA_GET_SHARES_COMMITMENTS))
-            .header("Content-Type", "application/json")
-            .body(serde_json::to_string(&blob_id).unwrap())
-            .send()
-            .await
-            .unwrap()
-            .json::<Option<DaSharesCommitments>>()
-            .await
-            .unwrap()
-    }
-
-    pub async fn get_mempoool_metrics(&self, pool: Pool) -> MempoolMetrics {
+    pub async fn get_mempool_metrics(&self, pool: Pool) -> MempoolMetrics {
         let discr = match pool {
             Pool::Mantle => "mantle",
-            Pool::Da => "da",
         };
         let addr = format!("/{discr}/metrics");
         let res = self
@@ -236,62 +293,18 @@ impl Validator {
         }
     }
 
-    pub async fn update_membership(
-        &self,
-        update_event: FinalizedBlockEvent,
-    ) -> Result<(), reqwest::Error> {
-        let update_event = MembershipUpdateRequest { update_event };
-        let json_body = serde_json::to_string(&update_event).unwrap();
-
-        let response = CLIENT
-            .post(format!(
+    pub async fn get_sdp_declarations(&self) -> Vec<Declaration> {
+        CLIENT
+            .get(format!(
                 "http://{}{}",
-                self.testing_http_addr, UPDATE_MEMBERSHIP
+                self.testing_http_addr, MANTLE_SDP_DECLARATIONS
             ))
-            .header("Content-Type", "application/json")
-            .body(json_body)
             .send()
-            .await;
-
-        assert!(
-            response.is_ok(),
-            "Failed to connect to testing endpoint {}.\n\
-            The binary was likely built without the 'testing' feature.\n\
-            Try: cargo build --workspace --all-features",
-            self.testing_http_addr
-        );
-
-        let response = response.unwrap();
-        response.error_for_status()?;
-        Ok(())
-    }
-
-    pub async fn da_historic_sampling(
-        &self,
-        session_id: SessionNumber,
-        block_id: HeaderId,
-        blob_ids: Vec<BlobId>,
-    ) -> Result<bool, reqwest::Error> {
-        let request = HistoricSamplingRequest {
-            session_id,
-            block_id,
-            blob_ids,
-        };
-
-        let response = CLIENT
-            .post(format!(
-                "http://{}{}",
-                self.testing_http_addr, DA_HISTORIC_SAMPLING
-            ))
-            .json(&request)
-            .send()
-            .await?;
-
-        response.error_for_status_ref()?;
-
-        // Parse the boolean response
-        let success: bool = response.json().await?;
-        Ok(success)
+            .await
+            .expect("Failed to fetch SDP declarations")
+            .json::<Vec<Declaration>>()
+            .await
+            .expect("Failed to deserialize SDP declarations response")
     }
 
     // not async so that we can use this in `Drop`
@@ -301,7 +314,6 @@ impl Validator {
             "fetching logs from dir {}...",
             self.tempdir.path().display()
         );
-        // std::thread::sleep(std::time::Duration::from_secs(50));
         std::fs::read_dir(self.tempdir.path())
             .unwrap()
             .filter_map(|entry| {
@@ -314,11 +326,16 @@ impl Validator {
     }
 
     #[must_use]
-    pub const fn config(&self) -> &Config {
+    pub const fn config(&self) -> &RunConfig {
         &self.config
     }
 
-    pub async fn get_headers(&self, from: Option<HeaderId>, to: Option<HeaderId>) -> Vec<HeaderId> {
+    pub async fn get_headers(
+        &self,
+        from: Option<HeaderId>,
+        to: Option<HeaderId>,
+        print: bool,
+    ) -> Vec<HeaderId> {
         let mut req = CLIENT.get(format!("http://{}{}", self.addr, CRYPTARCHIA_HEADERS));
 
         if let Some(from) = from {
@@ -331,269 +348,174 @@ impl Validator {
 
         let res = req.send().await;
 
-        println!("res: {res:?}");
+        if print {
+            println!("res: {res:?}");
+        }
 
         res.unwrap().json::<Vec<HeaderId>>().await.unwrap()
     }
 
-    pub async fn consensus_info(&self) -> CryptarchiaInfo {
+    pub async fn consensus_info(&self, print: bool) -> CryptarchiaInfo {
         let res = self.get(CRYPTARCHIA_INFO).await;
-        println!("{res:?}");
+        if print {
+            println!("{res:?}");
+        }
         res.unwrap().json().await.unwrap()
     }
 
-    pub async fn balancer_stats(&self) -> BalancerStats {
-        self.get(DA_BALANCER_STATS)
-            .await
-            .unwrap()
-            .json()
-            .await
-            .unwrap()
-    }
-
-    pub async fn monitor_stats(&self) -> MonitorStats {
-        self.get(DA_MONITOR_STATS)
-            .await
-            .unwrap()
-            .json()
-            .await
-            .unwrap()
-    }
-
-    pub async fn get_shares(
-        &self,
-        blob_id: BlobId,
-        requested_shares: HashSet<[u8; 2]>,
-        filter_shares: HashSet<[u8; 2]>,
-        return_available: bool,
-    ) -> Result<impl Stream<Item = DaLightShare>, common_http_client::Error> {
-        self.http_client
-            .get_shares::<DaShare>(
-                Url::from_str(&format!("http://{}", self.addr))?,
-                blob_id,
-                requested_shares,
-                filter_shares,
-                return_available,
-            )
-            .await
-    }
-
-    pub async fn get_storage_commitments(
-        &self,
-        blob_id: BlobId,
-    ) -> Result<Option<DaSharesCommitments>, common_http_client::Error> {
-        self.http_client
-            .get_storage_commitments::<DaShare>(
-                Url::from_str(&format!("http://{}", self.addr))?,
-                blob_id,
-            )
-            .await
+    pub async fn network_info(&self) -> Libp2pInfo {
+        self.get(NETWORK_INFO).await.unwrap().json().await.unwrap()
     }
 
     pub async fn get_lib_stream(
         &self,
-    ) -> Result<impl Stream<Item = BlockInfo>, common_http_client::Error> {
+    ) -> Result<impl Stream<Item = BlockInfo>, lb_common_http_client::Error> {
         self.http_client
             .get_lib_stream(Url::from_str(&format!("http://{}", self.addr))?)
             .await
     }
+
+    /// Wait for a list of transactions to be included in blocks
+    pub async fn wait_for_transactions_inclusion(
+        &self,
+        tx_hashes: Vec<TxHash>,
+        timeout: Duration,
+    ) -> Vec<Option<HeaderId>> {
+        let mut results = vec![None; tx_hashes.len()];
+
+        let mut tick = 0u8;
+        let _ = tokio::time::timeout(timeout, async {
+            loop {
+                let headers = self.get_headers(None, None, tick == 0).await;
+
+                for header_id in headers.iter().take(10) {
+                    if let Some(block) = self.get_block(*header_id).await {
+                        for tx in block.transactions() {
+                            for (i, target_hash) in tx_hashes.iter().enumerate() {
+                                if tx.hash() == *target_hash && results[i].is_none() {
+                                    results[i] = Some(*header_id);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                println!(
+                    "waiting for transactions ... {} of {}",
+                    results.iter().filter(|x| x.is_some()).count(),
+                    tx_hashes.len()
+                );
+                if results.iter().all(Option::is_some) {
+                    return;
+                }
+
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                tick = tick.wrapping_add(1);
+            }
+        })
+        .await;
+
+        results
+    }
 }
 
 #[must_use]
-#[expect(clippy::too_many_lines, reason = "TODO: Address this at some point.")]
-pub fn create_validator_config(config: GeneralConfig) -> Config {
-    let testing_http_address = format!("127.0.0.1:{}", get_available_tcp_port().unwrap())
-        .parse()
-        .unwrap();
+pub fn create_validator_config(
+    config: GeneralConfig,
+    deployment_config: DeploymentSettings,
+) -> RunConfig {
+    let network_config = config.network_config;
 
-    let da_policy_settings = config.da_config.policy_settings;
-    Config {
-        network: NetworkConfig {
-            backend: Libp2pConfig {
-                inner: config.network_config.swarm_config,
-                initial_peers: config.network_config.initial_peers,
-            },
+    let blend_config = config.blend_config.0;
+
+    let time_config = config.time_config;
+
+    let cryptarchia_config = {
+        let mut base_config =
+            CryptarchiaConfig::with_required_values(CryptarchiaConfigRequiredValues {
+                // We use the same funding key used for SDP.
+                funding_pk: config.consensus_config.funding_pk,
+            });
+        base_config.service.bootstrap.prolonged_bootstrap_period =
+            config.consensus_config.prolonged_bootstrap_period;
+        base_config
+    };
+
+    let tracing_config = config.tracing_config.tracing_settings;
+
+    let api_config = ApiConfig {
+        backend: AxumBackendSettings {
+            listen_address: config.api_config.address,
+            max_concurrent_requests: 1000,
+            ..Default::default()
         },
-        blend: BlendConfig::new(nomos_blend_service::core::settings::BlendConfig {
-            backend: config.blend_config.backend,
-            crypto: SessionCryptographicProcessorSettings {
-                non_ephemeral_signing_key: config.blend_config.private_key.clone(),
-                num_blend_layers: 1,
-            },
-            time: TimingSettings {
-                round_duration: Duration::from_secs(1),
-                rounds_per_interval: NonZeroU64::try_from(30u64)
-                    .expect("Rounds per interval cannot be zero."),
-                // (21,600 blocks * 30s per block) / 1s per round = 648,000 rounds
-                rounds_per_session: NonZeroU64::try_from(648_000u64)
-                    .expect("Rounds per session cannot be zero."),
-                rounds_per_observation_window: NonZeroU64::try_from(30u64)
-                    .expect("Rounds per observation window cannot be zero."),
-                rounds_per_session_transition_period: NonZeroU64::try_from(30u64)
-                    .expect("Rounds per session transition period cannot be zero."),
-            },
-            scheduler: SchedulerSettingsExt {
-                cover: CoverTrafficSettingsExt {
-                    intervals_for_safety_buffer: 100,
-                    message_frequency_per_round: NonNegativeF64::try_from(1f64)
-                        .expect("Message frequency per round cannot be negative."),
-                    redundancy_parameter: 0,
-                },
-                delayer: MessageDelayerSettingsExt {
-                    maximum_release_delay_in_rounds: NonZeroU64::try_from(3u64)
-                        .expect("Maximum release delay between rounds cannot be zero."),
-                },
-            },
-            minimum_network_size: 1
-                .try_into()
-                .expect("Minimum Blend network size cannot be zero."),
-        }),
-        cryptarchia: CryptarchiaSettings {
-            config: config.consensus_config.ledger_config,
-            genesis_id: HeaderId::from([0; 32]),
-            genesis_state: config.consensus_config.genesis_state,
-            network_adapter_settings:
-                chain_service::network::adapters::libp2p::LibP2pAdapterSettings {
-                    topic: String::from(nomos_node::CONSENSUS_TOPIC),
-                },
-            recovery_file: PathBuf::from("./recovery/cryptarchia.json"),
-            bootstrap: chain_service::BootstrapConfig {
-                prolonged_bootstrap_period: config.bootstrapping_config.prolonged_bootstrap_period,
-                force_bootstrap: false,
-                offline_grace_period: chain_service::OfflineGracePeriodConfig {
-                    grace_period: Duration::from_secs(20 * 60),
-                    state_recording_interval: Duration::from_secs(60),
-                },
-                ibd: chain_service::IbdConfig {
-                    peers: HashSet::new(),
-                    delay_before_new_download: Duration::from_secs(10),
-                },
-            },
-            sync: SyncConfig {
-                orphan: OrphanConfig {
-                    max_orphan_cache_size: NonZeroUsize::new(5)
-                        .expect("Max orphan cache size must be non-zero"),
-                },
-            },
+        testing: AxumBackendSettings {
+            listen_address: format!("127.0.0.1:{}", get_available_tcp_port().unwrap())
+                .parse()
+                .unwrap(),
+            max_concurrent_requests: 1000,
+            ..Default::default()
         },
-        cryptarchia_leader: LeaderSettings {
-            transaction_selector_settings: (),
-            config: config.consensus_config.ledger_config,
-            leader_config: config.consensus_config.leader_config.clone(),
-            blend_broadcast_settings:
-                nomos_blend_service::core::network::libp2p::Libp2pBroadcastSettings {
-                    topic: String::from(nomos_node::CONSENSUS_TOPIC),
-                },
-        },
-        da_network: DaNetworkConfig {
-            backend: DaNetworkBackendSettings {
-                node_key: config.da_config.node_key,
-                listening_address: config.da_config.listening_address,
-                policy_settings: DAConnectionPolicySettings {
-                    min_dispersal_peers: 0,
-                    min_replication_peers: da_policy_settings.min_replication_peers,
-                    max_dispersal_failures: da_policy_settings.max_dispersal_failures,
-                    max_sampling_failures: da_policy_settings.max_sampling_failures,
-                    max_replication_failures: da_policy_settings.max_replication_failures,
-                    malicious_threshold: da_policy_settings.malicious_threshold,
-                },
-                monitor_settings: config.da_config.monitor_settings,
-                balancer_interval: config.da_config.balancer_interval,
-                redial_cooldown: config.da_config.redial_cooldown,
-                replication_settings: config.da_config.replication_settings,
-                subnets_settings: SubnetsConfig {
-                    num_of_subnets: config.da_config.num_samples as usize,
-                    shares_retry_limit: config.da_config.retry_shares_limit,
-                    commitments_retry_limit: config.da_config.retry_commitments_limit,
-                },
-            },
-            membership: config.da_config.membership.clone(),
-            api_adapter_settings: ApiAdapterSettings {
-                api_port: config.api_config.address.port(),
-                is_secure: false,
-            },
-            subnet_refresh_interval: config.da_config.subnets_refresh_interval,
-            subnet_threshold: config.da_config.num_subnets as usize,
-        },
-        da_verifier: DaVerifierServiceSettings {
-            share_verifier_settings: KzgrsDaVerifierSettings {
-                global_params_path: config.da_config.global_params_path.clone(),
-                domain_size: config.da_config.num_subnets as usize,
-            },
-            tx_verifier_settings: (),
-            network_adapter_settings: (),
-            storage_adapter_settings: VerifierStorageAdapterSettings {
-                blob_storage_directory: "./".into(),
-            },
-            mempool_trigger_settings: MempoolPublishTriggerConfig {
-                publish_threshold: NonNegativeF64::try_from(0.8).unwrap(),
-                share_duration: Duration::from_secs(5),
-                prune_duration: Duration::from_secs(30),
-                prune_interval: Duration::from_secs(5),
-            },
-        },
-        tracing: config.tracing_config.tracing_settings,
-        http: nomos_api::ApiServiceSettings {
-            backend_settings: AxumBackendSettings {
-                address: config.api_config.address,
-                rate_limit_per_second: 10000,
-                rate_limit_burst: 10000,
-                max_concurrent_requests: 1000,
-                ..Default::default()
-            },
-        },
-        da_sampling: DaSamplingServiceSettings {
-            sampling_settings: KzgrsSamplingBackendSettings {
-                num_samples: config.da_config.num_samples,
-                num_subnets: config.da_config.num_subnets,
-                old_blobs_check_interval: config.da_config.old_blobs_check_interval,
-                blobs_validity_duration: config.da_config.blobs_validity_duration,
-            },
-            share_verifier_settings: SamplingVerifierSettings {
-                global_params_path: config.da_config.global_params_path,
-                domain_size: config.da_config.num_subnets as usize,
-            },
-            commitments_wait_duration: Duration::from_secs(1),
-        },
-        storage: RocksBackendSettings {
-            db_path: "./db".into(),
-            read_only: false,
-            column_family: Some("blocks".into()),
-        },
-        // TODO from
-        time: TimeServiceSettings {
-            backend_settings: NtpTimeBackendSettings {
-                ntp_server: config.time_config.ntp_server,
-                ntp_client_settings: NTPClientSettings {
-                    timeout: config.time_config.timeout,
-                    listening_interface: config.time_config.interface,
-                },
-                update_interval: config.time_config.update_interval,
-                slot_config: SlotConfig {
-                    slot_duration: config.time_config.slot_duration,
-                    chain_start_time: config.time_config.chain_start_time,
-                },
-                epoch_config: config.consensus_config.ledger_config.epoch_config,
-                base_period_length: config.consensus_config.ledger_config.base_period_length(),
-            },
-        },
-        mempool: MempoolConfig {
-            pool_recovery_path: "./recovery/mempool.json".into(),
-            trigger_sampling_delay: adjust_timeout(Duration::from_secs(5)),
-        },
-        membership: config.membership_config.service_settings,
-        sdp: (),
-        wallet: WalletServiceSettings {
-            known_keys: HashSet::from_iter([config.consensus_config.leader_config.pk]),
-        },
-        testing_http: nomos_api::ApiServiceSettings {
-            backend_settings: AxumBackendSettings {
-                address: testing_http_address,
-                rate_limit_per_second: 10000,
-                rate_limit_burst: 10000,
-                max_concurrent_requests: 1000,
-                ..Default::default()
-            },
-        },
+    };
+
+    let storage_config = StorageConfig::default();
+
+    let mut sdp_config = SdpConfig::with_required_values(SdpConfigRequiredValues {
+        funding_pk: config.consensus_config.funding_sk.as_public_key(),
+    });
+
+    if let Some(declaration_id) = config.sdp_config.declaration_id {
+        sdp_config.declaration_id = Some(declaration_id);
+    }
+
+    let wallet_config = {
+        let mut base_config = WalletConfig::with_required_values(WalletConfigRequiredValues {
+            voucher_master_key_id: key_id_for_preload_backend(
+                &config.consensus_config.known_key.clone().into(),
+            ),
+        });
+        base_config.known_keys = [
+            (
+                key_id_for_preload_backend(&config.consensus_config.known_key.clone().into()),
+                config.consensus_config.known_key.as_public_key(),
+            ),
+            (
+                key_id_for_preload_backend(&config.consensus_config.funding_sk.clone().into()),
+                config.consensus_config.funding_sk.as_public_key(),
+            ),
+        ]
+        .into_iter()
+        .chain(config.consensus_config.other_keys.iter().map(|sk| {
+            (
+                key_id_for_preload_backend(&sk.clone().into()),
+                sk.as_public_key(),
+            )
+        }))
+        .collect();
+
+        base_config
+    };
+
+    let kms_config = config.kms_config;
+
+    let state_config = StateConfig::default();
+
+    let user_config = UserConfig {
+        network: network_config,
+        blend: blend_config,
+        time: time_config,
+        cryptarchia: cryptarchia_config,
+        tracing: tracing_config,
+        api: api_config,
+        storage: storage_config,
+        sdp: sdp_config,
+        wallet: wallet_config,
+        kms: kms_config,
+        state: state_config,
+    };
+
+    RunConfig {
+        deployment: deployment_config,
+        user: user_config,
     }
 }

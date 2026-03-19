@@ -1,5 +1,4 @@
-use groth16::{Field as _, Fr, Groth16Input, Groth16InputDeser};
-use pol::compute_lottery_values;
+use lb_groth16::{Field as _, Fr, Groth16Input, Groth16InputDeser};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -30,8 +29,7 @@ impl PoQWitnessInputs {
             common: common.try_into()?,
             blend: PoQBlendInputs::from(PoQBlendInputsData {
                 core_sk: Fr::ZERO,
-                core_path: vec![Fr::ZERO; 20],
-                core_path_selectors: vec![false; 20],
+                core_path_and_selectors: [(Fr::ZERO, false); _],
             }),
             wallet: wallet.into(),
         })
@@ -51,11 +49,8 @@ impl PoQWitnessInputs {
                 note_value: 0,
                 transaction_hash: Fr::ZERO,
                 output_number: 0,
-                aged_path: vec![Fr::ZERO; 32],
-                aged_selector: vec![false; 32],
-                slot_secret: Fr::ZERO,
-                slot_secret_path: vec![Fr::ZERO; 25],
-                starting_slot: 0,
+                aged_path_and_selectors: [(Fr::ZERO, false); _],
+                secret_key: Fr::ZERO,
             }),
         })
     }
@@ -73,24 +68,13 @@ pub struct PoQInputsJson {
     pub wallet: PoQWalletInputsJson,
 }
 
-impl From<&PoQWitnessInputs> for PoQInputsJson {
-    fn from(inputs: &PoQWitnessInputs) -> Self {
-        Self {
-            wallet: (&inputs.wallet).into(),
-            chain: (&inputs.chain).into(),
-            common: (&inputs.common).into(),
-            blend: (&inputs.blend).into(),
-        }
-    }
-}
-
 impl From<PoQWitnessInputs> for PoQInputsJson {
     fn from(inputs: PoQWitnessInputs) -> Self {
         Self {
-            wallet: (&inputs.wallet).into(),
+            wallet: inputs.wallet.into(),
             chain: (&inputs.chain).into(),
             common: (&inputs.common).into(),
-            blend: (&inputs.blend).into(),
+            blend: inputs.blend.into(),
         }
     }
 }
@@ -122,7 +106,8 @@ pub struct PoQVerifierInputData {
     pub k_part_one: Fr,
     pub k_part_two: Fr,
     pub pol_epoch_nonce: Fr,
-    pub total_stake: u64,
+    pub lottery_0: Fr,
+    pub lottery_1: Fr,
     pub pol_ledger_aged: Fr,
 }
 
@@ -180,8 +165,6 @@ impl PoQVerifierInput {
 
 impl From<PoQVerifierInputData> for PoQVerifierInput {
     fn from(value: PoQVerifierInputData) -> Self {
-        let (lottery_0, lottery_1) = compute_lottery_values(value.total_stake);
-
         Self {
             core_quota: Groth16Input::new(value.core_quota.into()),
             core_root: value.core_root.into(),
@@ -191,8 +174,8 @@ impl From<PoQVerifierInputData> for PoQVerifierInput {
             leader_quota: Groth16Input::new(value.leader_quota.into()),
             pol_epoch_nonce: value.pol_epoch_nonce.into(),
             pol_ledger_aged: value.pol_ledger_aged.into(),
-            pol_t0: Groth16Input::new(lottery_0.into()),
-            pol_t1: Groth16Input::new(lottery_1.into()),
+            pol_t0: Groth16Input::new(value.lottery_0),
+            pol_t1: Groth16Input::new(value.lottery_1),
             session: Groth16Input::new(value.session.into()),
         }
     }

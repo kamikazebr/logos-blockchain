@@ -1,17 +1,11 @@
 use std::{path::PathBuf, sync::LazyLock};
 
-use circuits_utils::find_file;
-
 use crate::{PoCWitnessInputs, inputs::PoCInputsJson};
 
-const BINARY_NAME: &str = "poc";
-const BINARY_ENV_VAR: &str = "NOMOS_POC";
+const CIRCUIT_NAME: &str = "poc";
 
-static BINARY: LazyLock<PathBuf> = LazyLock::new(|| {
-    find_file(BINARY_NAME, BINARY_ENV_VAR).unwrap_or_else(|error_message| {
-        panic!("Could not find the required '{BINARY_NAME}' binary: {error_message}");
-    })
-});
+static BINARY: LazyLock<PathBuf> =
+    LazyLock::new(|| lb_circuits_utils::witness_generator_path(CIRCUIT_NAME));
 
 /// Witness of the circuit.
 pub struct Witness(Vec<u8>);
@@ -38,5 +32,5 @@ pub fn generate_witness(inputs: &PoCWitnessInputs) -> Result<Witness, std::io::E
     let poc_inputs_json: PoCInputsJson = inputs.into();
     let str_inputs: String =
         serde_json::to_string(&poc_inputs_json).expect("Failed to serialize inputs");
-    witness_generator::generate_witness(&str_inputs, BINARY.as_path()).map(Witness)
+    lb_witness_generator::generate_witness(&str_inputs, BINARY.as_path()).map(Witness)
 }
