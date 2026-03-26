@@ -28,17 +28,32 @@ use crate::{
 /// Each instance is meant to be used during a single session.
 ///
 /// This processor is suitable for core nodes.
-pub struct SessionCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>
-{
-    sender_processor:
-        SenderSessionCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator>,
+pub struct SessionCryptographicProcessor<
+    NodeId,
+    CorePoQGenerator,
+    ProofsGenerator,
+    ProofsVerifier,
+    SecretInfoStream,
+> {
+    sender_processor: SenderSessionCryptographicProcessor<
+        NodeId,
+        CorePoQGenerator,
+        ProofsGenerator,
+        SecretInfoStream,
+    >,
     proofs_verifier: ProofsVerifier,
 }
 
-impl<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>
-    SessionCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>
+impl<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, SecretInfoStream>
+    SessionCryptographicProcessor<
+        NodeId,
+        CorePoQGenerator,
+        ProofsGenerator,
+        ProofsVerifier,
+        SecretInfoStream,
+    >
 where
-    ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator>,
+    ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator, SecretInfoStream>,
     ProofsVerifier: ProofsVerifierTrait,
 {
     #[must_use]
@@ -69,16 +84,28 @@ where
     }
 }
 
-impl<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>
-    SessionCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>
+impl<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, SecretInfoStream>
+    SessionCryptographicProcessor<
+        NodeId,
+        CorePoQGenerator,
+        ProofsGenerator,
+        ProofsVerifier,
+        SecretInfoStream,
+    >
 {
     pub const fn verifier(&self) -> &ProofsVerifier {
         &self.proofs_verifier
     }
 }
 
-impl<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>
-    SessionCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>
+impl<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, SecretInfoStream>
+    SessionCryptographicProcessor<
+        NodeId,
+        CorePoQGenerator,
+        ProofsGenerator,
+        ProofsVerifier,
+        SecretInfoStream,
+    >
 where
     ProofsVerifier: ProofsVerifierTrait,
 {
@@ -106,18 +133,35 @@ where
 
 // `Deref` and `DerefMut` so we can call the `encapsulate*` methods exposed by
 // the send-only processor.
-impl<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier> Deref
-    for SessionCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>
+impl<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, SecretInfoStream> Deref
+    for SessionCryptographicProcessor<
+        NodeId,
+        CorePoQGenerator,
+        ProofsGenerator,
+        ProofsVerifier,
+        SecretInfoStream,
+    >
 {
-    type Target = SenderSessionCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator>;
+    type Target = SenderSessionCryptographicProcessor<
+        NodeId,
+        CorePoQGenerator,
+        ProofsGenerator,
+        SecretInfoStream,
+    >;
 
     fn deref(&self) -> &Self::Target {
         &self.sender_processor
     }
 }
 
-impl<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier> DerefMut
-    for SessionCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>
+impl<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, SecretInfoStream> DerefMut
+    for SessionCryptographicProcessor<
+        NodeId,
+        CorePoQGenerator,
+        ProofsGenerator,
+        ProofsVerifier,
+        SecretInfoStream,
+    >
 {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.sender_processor
@@ -153,8 +197,9 @@ mod test {
         let mut processor = SessionCryptographicProcessor::<
             _,
             _,
-            TestEpochChangeCoreAndLeaderProofsGenerator,
+            TestEpochChangeCoreAndLeaderProofsGenerator<()>,
             TestEpochChangeProofsVerifier,
+            (),
         >::new(
             SessionCryptographicProcessorSettings {
                 non_ephemeral_encryption_key: [0; _].into(),

@@ -13,7 +13,7 @@ use crate::message_blend::{
     provers::{
         BlendLayerProof, ProofsGeneratorSettings,
         core::{CoreProofsGenerator as _, RealCoreProofsGenerator},
-        leader::{LeaderProofsGenerator as _, RealLeaderProofsGenerator},
+        leader::{LeaderProofsGenerator, RealLeaderProofsGenerator},
     },
 };
 
@@ -143,7 +143,11 @@ where
     ) {
         // Update core proof generation and optionally deactivates leadership proof
         // generation, which is then re-created below.
-        self.rotate_epoch(new_epoch_public, new_epoch);
+        <Self as CoreAndLeaderProofsGenerator<CorePoQGenerator, SecretInfoStream>>::rotate_epoch(
+            self,
+            new_epoch_public,
+            new_epoch,
+        );
 
         let current_session_local_node_index = self.core_proofs_generator.settings.local_node_index;
         let current_session_membership_size = self.core_proofs_generator.settings.membership_size;
@@ -176,7 +180,11 @@ where
         let Some(leader_proofs_generator) = &mut self.leader_proofs_generator else {
             return None;
         };
-        let proof = leader_proofs_generator.get_next_proof().await;
+        let proof =
+            <RealLeaderProofsGenerator as LeaderProofsGenerator<SecretInfoStream>>::get_next_proof(
+                leader_proofs_generator,
+            )
+            .await;
         Some(proof)
     }
 }

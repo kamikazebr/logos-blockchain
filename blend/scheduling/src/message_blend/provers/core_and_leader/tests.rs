@@ -1,10 +1,13 @@
-use lb_blend_proofs::selection::inputs::VerifyInputs;
+use futures::{Stream, stream};
+use lb_blend_proofs::{
+    quota::inputs::prove::private::ProofOfLeadershipQuotaInputs, selection::inputs::VerifyInputs,
+};
 use lb_cryptarchia_engine::Epoch;
 use test_log::test;
 
 use crate::message_blend::provers::{
     ProofsGeneratorSettings,
-    core_and_leader::{CoreAndLeaderProofsGenerator as _, RealCoreAndLeaderProofsGenerator},
+    core_and_leader::{CoreAndLeaderProofsGenerator, RealCoreAndLeaderProofsGenerator},
     test_utils::{
         CorePoQGeneratorFromPrivateCoreQuotaInputs,
         poq_public_inputs_from_session_public_inputs_and_signing_key, valid_proof_of_leader_inputs,
@@ -17,22 +20,28 @@ async fn proof_generation() {
     let core_quota = 10;
     let (core_public_inputs, core_private_inputs) = valid_proof_of_quota_inputs(core_quota);
 
-    let mut core_and_leader_proofs_generator = RealCoreAndLeaderProofsGenerator::new(
-        ProofsGeneratorSettings {
-            local_node_index: None,
-            membership_size: 1,
-            public_inputs: core_public_inputs,
-            encapsulation_layers: 1.try_into().unwrap(),
-            epoch: Epoch::new(0),
-        },
-        CorePoQGeneratorFromPrivateCoreQuotaInputs::new(core_private_inputs),
-    );
+    let mut core_and_leader_proofs_generator =
+        <RealCoreAndLeaderProofsGenerator<_> as CoreAndLeaderProofsGenerator<
+            _,
+            Box<dyn Stream<Item = ProofOfLeadershipQuotaInputs> + Unpin + Send>,
+        >>::new(
+            ProofsGeneratorSettings {
+                local_node_index: None,
+                membership_size: 1,
+                public_inputs: core_public_inputs,
+                encapsulation_layers: 1.try_into().unwrap(),
+                epoch: Epoch::new(0),
+            },
+            CorePoQGeneratorFromPrivateCoreQuotaInputs::new(core_private_inputs),
+        );
 
     for _ in 0..core_quota {
-        let proof = core_and_leader_proofs_generator
-            .get_next_core_proof()
-            .await
-            .unwrap();
+        let proof = <RealCoreAndLeaderProofsGenerator<_> as CoreAndLeaderProofsGenerator<
+            _,
+            Box<dyn Stream<Item = ProofOfLeadershipQuotaInputs> + Unpin + Send>,
+        >>::get_next_core_proof(&mut core_and_leader_proofs_generator)
+        .await
+        .unwrap();
         let verified_proof_of_quota = proof
             .proof_of_quota
             .into_inner()
@@ -57,10 +66,12 @@ async fn proof_generation() {
 
     // Next proof should be `None` since we ran out of core quota.
     assert!(
-        core_and_leader_proofs_generator
-            .get_next_core_proof()
-            .await
-            .is_none()
+        <RealCoreAndLeaderProofsGenerator<_> as CoreAndLeaderProofsGenerator<
+            _,
+            Box<dyn Stream<Item = ProofOfLeadershipQuotaInputs> + Unpin + Send>,
+        >>::get_next_core_proof(&mut core_and_leader_proofs_generator)
+        .await
+        .is_none()
     );
 
     let leadership_quota = 15;
@@ -76,17 +87,21 @@ async fn proof_generation() {
         encapsulation_layers: 1.try_into().unwrap(),
         epoch: Epoch::new(0),
     });
-    core_and_leader_proofs_generator.set_epoch_private(
-        leadership_private_inputs,
+
+    <RealCoreAndLeaderProofsGenerator<_> as CoreAndLeaderProofsGenerator<_, _>>::set_epoch_private(
+        &mut core_and_leader_proofs_generator,
+        stream::repeat(leadership_private_inputs),
         leadership_public_inputs.leader,
         Epoch::new(1),
     );
 
     for _ in 0..leadership_quota {
-        let proof = core_and_leader_proofs_generator
-            .get_next_leader_proof()
-            .await
-            .unwrap();
+        let proof = <RealCoreAndLeaderProofsGenerator<_> as CoreAndLeaderProofsGenerator<
+            _,
+            Box<dyn Stream<Item = ProofOfLeadershipQuotaInputs> + Unpin + Send>,
+        >>::get_next_leader_proof(&mut core_and_leader_proofs_generator)
+        .await
+        .unwrap();
         let verified_proof_of_quota = proof
             .proof_of_quota
             .into_inner()
@@ -114,24 +129,30 @@ async fn epoch_rotation() {
     let core_quota = 10;
     let (public_inputs, private_inputs) = valid_proof_of_quota_inputs(core_quota);
 
-    let mut core_and_leader_proofs_generator = RealCoreAndLeaderProofsGenerator::new(
-        ProofsGeneratorSettings {
-            local_node_index: None,
-            membership_size: 1,
-            public_inputs,
-            encapsulation_layers: 1.try_into().unwrap(),
-            epoch: Epoch::new(1),
-        },
-        CorePoQGeneratorFromPrivateCoreQuotaInputs::new(private_inputs),
-    );
+    let mut core_and_leader_proofs_generator =
+        <RealCoreAndLeaderProofsGenerator<_> as CoreAndLeaderProofsGenerator<
+            _,
+            Box<dyn Stream<Item = ProofOfLeadershipQuotaInputs> + Unpin + Send>,
+        >>::new(
+            ProofsGeneratorSettings {
+                local_node_index: None,
+                membership_size: 1,
+                public_inputs,
+                encapsulation_layers: 1.try_into().unwrap(),
+                epoch: Epoch::new(1),
+            },
+            CorePoQGeneratorFromPrivateCoreQuotaInputs::new(private_inputs),
+        );
 
     // Request all but the last proof, before rotating epoch (with the same public
     // data because proofs use hard-coded fixtures).
     for _ in 0..(core_quota - 1) {
-        let proof = core_and_leader_proofs_generator
-            .get_next_core_proof()
-            .await
-            .unwrap();
+        let proof = <RealCoreAndLeaderProofsGenerator<_> as CoreAndLeaderProofsGenerator<
+            _,
+            Box<dyn Stream<Item = ProofOfLeadershipQuotaInputs> + Unpin + Send>,
+        >>::get_next_core_proof(&mut core_and_leader_proofs_generator)
+        .await
+        .unwrap();
         let verified_proof_of_quota = proof
             .proof_of_quota
             .into_inner()
@@ -160,16 +181,20 @@ async fn epoch_rotation() {
             .is_none()
     );
     assert!(
-        core_and_leader_proofs_generator
-            .get_next_leader_proof()
-            .await
-            .is_none()
+        <RealCoreAndLeaderProofsGenerator<_> as CoreAndLeaderProofsGenerator<
+            _,
+            Box<dyn Stream<Item = ProofOfLeadershipQuotaInputs> + Unpin + Send>,
+        >>::get_next_leader_proof(&mut core_and_leader_proofs_generator)
+        .await
+        .is_none()
     );
     // Generate and verify last proof.
-    let proof = core_and_leader_proofs_generator
-        .get_next_core_proof()
-        .await
-        .unwrap();
+    let proof = <RealCoreAndLeaderProofsGenerator<_> as CoreAndLeaderProofsGenerator<
+        _,
+        Box<dyn Stream<Item = ProofOfLeadershipQuotaInputs> + Unpin + Send>,
+    >>::get_next_core_proof(&mut core_and_leader_proofs_generator)
+    .await
+    .unwrap();
     let verified_proof_of_quota = proof
         .proof_of_quota
         .into_inner()
@@ -192,10 +217,12 @@ async fn epoch_rotation() {
 
     // Next proof should be `None` since we ran out of core quota.
     assert!(
-        core_and_leader_proofs_generator
-            .get_next_core_proof()
-            .await
-            .is_none()
+        <RealCoreAndLeaderProofsGenerator<_> as CoreAndLeaderProofsGenerator<
+            _,
+            Box<dyn Stream<Item = ProofOfLeadershipQuotaInputs> + Unpin + Send>,
+        >>::get_next_core_proof(&mut core_and_leader_proofs_generator)
+        .await
+        .is_none()
     );
 }
 
@@ -207,28 +234,34 @@ async fn epoch_private_info() {
     let (leadership_public_inputs, leadership_private_inputs) =
         valid_proof_of_leader_inputs(leadership_quota);
 
-    let mut core_and_leader_proofs_generator = RealCoreAndLeaderProofsGenerator::new(
-        ProofsGeneratorSettings {
-            local_node_index: None,
-            membership_size: 1,
-            public_inputs: leadership_public_inputs,
-            encapsulation_layers: 1.try_into().unwrap(),
-            epoch: Epoch::new(0),
-        },
-        CorePoQGeneratorFromPrivateCoreQuotaInputs::new(core_private_inputs.clone()),
-    );
+    let mut core_and_leader_proofs_generator =
+        <RealCoreAndLeaderProofsGenerator<_> as CoreAndLeaderProofsGenerator<
+            _,
+            Box<dyn Stream<Item = ProofOfLeadershipQuotaInputs> + Unpin + Send>,
+        >>::new(
+            ProofsGeneratorSettings {
+                local_node_index: None,
+                membership_size: 1,
+                public_inputs: leadership_public_inputs,
+                encapsulation_layers: 1.try_into().unwrap(),
+                epoch: Epoch::new(0),
+            },
+            CorePoQGeneratorFromPrivateCoreQuotaInputs::new(core_private_inputs.clone()),
+        );
 
     core_and_leader_proofs_generator.set_epoch_private(
-        leadership_private_inputs,
+        stream::repeat(leadership_private_inputs),
         leadership_public_inputs.leader,
         Epoch::new(1),
     );
 
     // Leadership proof should be generated and verified correctly.
-    let proof = core_and_leader_proofs_generator
-        .get_next_leader_proof()
-        .await
-        .unwrap();
+    let proof = <RealCoreAndLeaderProofsGenerator<_> as CoreAndLeaderProofsGenerator<
+        _,
+        Box<dyn Stream<Item = ProofOfLeadershipQuotaInputs> + Unpin + Send>,
+    >>::get_next_leader_proof(&mut core_and_leader_proofs_generator)
+    .await
+    .unwrap();
     let verified_proof_of_quota = proof
         .proof_of_quota
         .into_inner()
@@ -250,10 +283,12 @@ async fn epoch_private_info() {
         .unwrap();
 
     // New proof should verify successfully.
-    let proof = core_and_leader_proofs_generator
-        .get_next_leader_proof()
-        .await
-        .unwrap();
+    let proof = <RealCoreAndLeaderProofsGenerator<_> as CoreAndLeaderProofsGenerator<
+        _,
+        Box<dyn Stream<Item = ProofOfLeadershipQuotaInputs> + Unpin + Send>,
+    >>::get_next_leader_proof(&mut core_and_leader_proofs_generator)
+    .await
+    .unwrap();
     let verified_proof_of_quota = proof
         .proof_of_quota
         .into_inner()
@@ -284,13 +319,22 @@ async fn epoch_private_info() {
         encapsulation_layers: 1.try_into().unwrap(),
         epoch: Epoch::new(0),
     });
-    core_and_leader_proofs_generator.rotate_epoch(core_public_inputs.leader, Epoch::new(1));
+    <RealCoreAndLeaderProofsGenerator<_> as CoreAndLeaderProofsGenerator<
+        _,
+        Box<dyn Stream<Item = ProofOfLeadershipQuotaInputs> + Unpin + Send>,
+    >>::rotate_epoch(
+        &mut core_and_leader_proofs_generator,
+        core_public_inputs.leader,
+        Epoch::new(1),
+    );
 
     // We test that core proof generation still works fine
-    let proof = core_and_leader_proofs_generator
-        .get_next_core_proof()
-        .await
-        .unwrap();
+    let proof = <RealCoreAndLeaderProofsGenerator<_> as CoreAndLeaderProofsGenerator<
+        _,
+        Box<dyn Stream<Item = ProofOfLeadershipQuotaInputs> + Unpin + Send>,
+    >>::get_next_core_proof(&mut core_and_leader_proofs_generator)
+    .await
+    .unwrap();
     let verified_proof_of_quota = proof
         .proof_of_quota
         .into_inner()

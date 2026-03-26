@@ -1,13 +1,11 @@
-use core::hash::Hash;
+use core::{hash::Hash, marker::PhantomData};
 use std::num::NonZeroU64;
 
 use lb_blend_message::{
     Error, PaddedPayloadBody, PayloadType, crypto::proofs::PoQVerificationInputsMinusSigningKey,
     input::EncapsulationInput,
 };
-use lb_blend_proofs::quota::inputs::prove::{
-    private::ProofOfLeadershipQuotaInputs, public::LeaderInputs,
-};
+use lb_blend_proofs::quota::inputs::prove::public::LeaderInputs;
 use lb_cryptarchia_engine::Epoch;
 
 use crate::{
@@ -26,22 +24,24 @@ use crate::{
 ///
 /// This processor is suitable for non-core nodes that do not need to generate
 /// any cover traffic and are hence only interested in blending data messages.
-pub struct SessionCryptographicProcessor<NodeId, ProofsGenerator> {
+pub struct SessionCryptographicProcessor<NodeId, ProofsGenerator, SecretInfoStream> {
     num_blend_layers: NonZeroU64,
     membership: Membership<NodeId>,
     proofs_generator: ProofsGenerator,
+    _phantom: PhantomData<SecretInfoStream>,
 }
 
-impl<NodeId, ProofsGenerator> SessionCryptographicProcessor<NodeId, ProofsGenerator>
+impl<NodeId, ProofsGenerator, SecretInfoStream>
+    SessionCryptographicProcessor<NodeId, ProofsGenerator, SecretInfoStream>
 where
-    ProofsGenerator: LeaderProofsGenerator,
+    ProofsGenerator: LeaderProofsGenerator<SecretInfoStream>,
 {
     #[must_use]
     pub fn new(
         num_blend_layers: NonZeroU64,
         membership: Membership<NodeId>,
         public_info: PoQVerificationInputsMinusSigningKey,
-        private_info: &ProofOfLeadershipQuotaInputs,
+        private_inputs_stream: SecretInfoStream,
         epoch: Epoch,
     ) -> Self {
         let generator_settings = ProofsGeneratorSettings {
@@ -54,25 +54,27 @@ where
         Self {
             num_blend_layers,
             membership,
-            proofs_generator: ProofsGenerator::new(generator_settings, *private_info),
+            proofs_generator: ProofsGenerator::new(generator_settings, private_inputs_stream),
+            _phantom: PhantomData,
         }
     }
 
     pub fn rotate_epoch(
         &mut self,
         new_epoch_public: LeaderInputs,
-        new_private_inputs: ProofOfLeadershipQuotaInputs,
+        new_private_inputs_stream: SecretInfoStream,
         new_epoch: Epoch,
     ) {
         self.proofs_generator
-            .rotate_epoch(new_epoch_public, new_private_inputs, new_epoch);
+            .rotate_epoch(new_epoch_public, new_private_inputs_stream, new_epoch);
     }
 }
 
-impl<NodeId, ProofsGenerator> SessionCryptographicProcessor<NodeId, ProofsGenerator>
+impl<NodeId, ProofsGenerator, SecretInfoStream>
+    SessionCryptographicProcessor<NodeId, ProofsGenerator, SecretInfoStream>
 where
     NodeId: Eq + Hash + 'static,
-    ProofsGenerator: LeaderProofsGenerator,
+    ProofsGenerator: LeaderProofsGenerator<SecretInfoStream>,
 {
     pub async fn encapsulate_data_payload(
         &mut self,
@@ -145,6 +147,7 @@ where
 mod test {
     use std::num::NonZeroU64;
 
+    use futures::{StreamExt as _, stream};
     use lb_blend_message::crypto::proofs::PoQVerificationInputsMinusSigningKey;
     use lb_blend_proofs::quota::inputs::prove::{
         private::ProofOfLeadershipQuotaInputs,
@@ -162,10 +165,10 @@ mod test {
         message_blend::crypto::test_utils::TestEpochChangeLeaderProofsGenerator,
     };
 
-    #[test]
-    fn epoch_rotation() {
+    #[tokio::test]
+    async fn epoch_rotation() {
         let mut processor =
-            SessionCryptographicProcessor::<_, TestEpochChangeLeaderProofsGenerator>::new(
+            SessionCryptographicProcessor::<_, TestEpochChangeLeaderProofsGenerator<_>, _>::new(
                 NonZeroU64::new(1).unwrap(),
                 Membership::new_without_local(&[Node {
                     address: Multiaddr::empty(),
@@ -187,14 +190,14 @@ mod test {
                         lottery_1: Fr::ZERO,
                     },
                 },
-                &ProofOfLeadershipQuotaInputs {
+                stream::repeat(ProofOfLeadershipQuotaInputs {
                     aged_path_and_selectors: [(ZkHash::ZERO, false); _],
                     note_value: 1,
                     output_number: 1,
                     secret_key: ZkHash::ZERO,
                     slot: 1,
                     transaction_hash: ZkHash::ZERO,
-                },
+                }),
                 Epoch::new(0),
             );
 
@@ -214,12 +217,16 @@ mod test {
             transaction_hash: ZkHash::ONE,
         };
 
-        processor.rotate_epoch(new_leader_inputs, new_private_inputs, Epoch::new(1));
+        processor.rotate_epoch(
+            new_leader_inputs,
+            stream::repeat(new_private_inputs),
+            Epoch::new(1),
+        );
 
         assert_eq!(
             processor.proofs_generator.0.public_inputs.leader,
             new_leader_inputs
         );
-        assert!(processor.proofs_generator.1 == new_private_inputs);
+        assert!(processor.proofs_generator.1.next().await.unwrap() == new_private_inputs);
     }
 }

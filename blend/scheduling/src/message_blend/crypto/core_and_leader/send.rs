@@ -5,9 +5,7 @@ use lb_blend_message::{
     Error, PaddedPayloadBody, PayloadType, crypto::proofs::PoQVerificationInputsMinusSigningKey,
     input::EncapsulationInput,
 };
-use lb_blend_proofs::quota::inputs::prove::{
-    private::ProofOfLeadershipQuotaInputs, public::LeaderInputs,
-};
+use lb_blend_proofs::quota::inputs::prove::public::LeaderInputs;
 use lb_cryptarchia_engine::Epoch;
 use lb_key_management_system_keys::keys::X25519PrivateKey;
 
@@ -25,17 +23,22 @@ use crate::{
 /// cover and data messages for the message indistinguishability.
 ///
 /// Each instance is meant to be used during a single session.
-pub struct SessionCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator> {
+pub struct SessionCryptographicProcessor<
+    NodeId,
+    CorePoQGenerator,
+    ProofsGenerator,
+    SecretInfoStream,
+> {
     num_blend_layers: NonZeroU64,
     /// The non-ephemeral encryption key (NEK) for decapsulating messages.
     non_ephemeral_encryption_key: X25519PrivateKey,
     membership: Membership<NodeId>,
     proofs_generator: ProofsGenerator,
-    _phantom: PhantomData<CorePoQGenerator>,
+    _phantom: PhantomData<(CorePoQGenerator, SecretInfoStream)>,
 }
 
-impl<NodeId, CorePoQGenerator, ProofsGenerator>
-    SessionCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator>
+impl<NodeId, CorePoQGenerator, ProofsGenerator, SecretInfoStream>
+    SessionCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, SecretInfoStream>
 {
     pub(super) const fn non_ephemeral_encryption_key(&self) -> &X25519PrivateKey {
         &self.non_ephemeral_encryption_key
@@ -51,10 +54,10 @@ impl<NodeId, CorePoQGenerator, ProofsGenerator>
     }
 }
 
-impl<NodeId, CorePoQGenerator, ProofsGenerator>
-    SessionCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator>
+impl<NodeId, CorePoQGenerator, ProofsGenerator, SecretInfoStream>
+    SessionCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, SecretInfoStream>
 where
-    ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator>,
+    ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator, SecretInfoStream>,
 {
     #[must_use]
     pub fn new(
@@ -97,23 +100,23 @@ where
 
     pub fn set_epoch_private(
         &mut self,
-        new_epoch_private: ProofOfLeadershipQuotaInputs,
+        new_private_inputs_stream: SecretInfoStream,
         new_epoch_public_info: LeaderInputs,
         new_epoch: Epoch,
     ) {
         self.proofs_generator.set_epoch_private(
-            new_epoch_private,
+            new_private_inputs_stream,
             new_epoch_public_info,
             new_epoch,
         );
     }
 }
 
-impl<NodeId, CorePoQGenerator, ProofsGenerator>
-    SessionCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator>
+impl<NodeId, CorePoQGenerator, ProofsGenerator, SecretInfoStream>
+    SessionCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, SecretInfoStream>
 where
     NodeId: Eq + Hash + 'static,
-    ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator>,
+    ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator, SecretInfoStream>,
 {
     pub async fn encapsulate_cover_payload(
         &mut self,
@@ -236,7 +239,8 @@ mod test {
         let mut processor = SessionCryptographicProcessor::<
             _,
             _,
-            TestEpochChangeCoreAndLeaderProofsGenerator,
+            TestEpochChangeCoreAndLeaderProofsGenerator<()>,
+            (),
         >::new(
             SessionCryptographicProcessorSettings {
                 non_ephemeral_encryption_key: [0; _].into(),
@@ -293,7 +297,8 @@ mod test {
         let mut processor = SessionCryptographicProcessor::<
             _,
             _,
-            TestEpochChangeCoreAndLeaderProofsGenerator,
+            TestEpochChangeCoreAndLeaderProofsGenerator<_>,
+            _,
         >::new(
             SessionCryptographicProcessorSettings {
                 non_ephemeral_encryption_key: [0; _].into(),

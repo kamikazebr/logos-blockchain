@@ -8,9 +8,7 @@ use lb_blend_message::{
 use lb_blend_proofs::{
     quota::{
         self, ProofOfQuota, VerifiedProofOfQuota,
-        inputs::prove::{
-            PublicInputs, private::ProofOfLeadershipQuotaInputs, public::LeaderInputs,
-        },
+        inputs::prove::{PublicInputs, public::LeaderInputs},
     },
     selection::{ProofOfSelection, VerifiedProofOfSelection, inputs::VerifyInputs},
 };
@@ -26,28 +24,29 @@ use crate::message_blend::{
     },
 };
 
-pub struct TestEpochChangeLeaderProofsGenerator(
+pub struct TestEpochChangeLeaderProofsGenerator<SecretInfoStream>(
     pub ProofsGeneratorSettings,
-    pub ProofOfLeadershipQuotaInputs,
+    pub SecretInfoStream,
 );
 
 #[async_trait]
-impl LeaderProofsGenerator for TestEpochChangeLeaderProofsGenerator {
-    fn new(
-        settings: ProofsGeneratorSettings,
-        private_inputs: ProofOfLeadershipQuotaInputs,
-    ) -> Self {
-        Self(settings, private_inputs)
+impl<SecretInfoStream> LeaderProofsGenerator<SecretInfoStream>
+    for TestEpochChangeLeaderProofsGenerator<SecretInfoStream>
+where
+    SecretInfoStream: Send,
+{
+    fn new(settings: ProofsGeneratorSettings, private_inputs_stream: SecretInfoStream) -> Self {
+        Self(settings, private_inputs_stream)
     }
 
     fn rotate_epoch(
         &mut self,
         new_epoch_public: LeaderInputs,
-        new_private_inputs: ProofOfLeadershipQuotaInputs,
+        new_private_inputs_stream: SecretInfoStream,
         _new_epoch: Epoch,
     ) {
         self.0.public_inputs.leader = new_epoch_public;
-        self.1 = new_private_inputs;
+        self.1 = new_private_inputs_stream;
     }
 
     async fn get_next_proof(&mut self) -> BlendLayerProof {
@@ -77,14 +76,17 @@ impl CoreProofOfQuotaGenerator for MockCorePoQGenerator {
     }
 }
 
-pub struct TestEpochChangeCoreAndLeaderProofsGenerator(
+pub struct TestEpochChangeCoreAndLeaderProofsGenerator<SecretInfoStream>(
     pub ProofsGeneratorSettings,
-    pub Option<ProofOfLeadershipQuotaInputs>,
+    pub Option<SecretInfoStream>,
 );
 
 #[async_trait]
-impl<CorePoQGenerator> CoreAndLeaderProofsGenerator<CorePoQGenerator>
-    for TestEpochChangeCoreAndLeaderProofsGenerator
+impl<CorePoQGenerator, SecretInfoStream>
+    CoreAndLeaderProofsGenerator<CorePoQGenerator, SecretInfoStream>
+    for TestEpochChangeCoreAndLeaderProofsGenerator<SecretInfoStream>
+where
+    SecretInfoStream: Send,
 {
     fn new(settings: ProofsGeneratorSettings, _proof_of_quota_generator: CorePoQGenerator) -> Self {
         Self(settings, None)
@@ -96,11 +98,11 @@ impl<CorePoQGenerator> CoreAndLeaderProofsGenerator<CorePoQGenerator>
 
     fn set_epoch_private(
         &mut self,
-        new_epoch_private: ProofOfLeadershipQuotaInputs,
+        new_private_inputs_stream: SecretInfoStream,
         _new_epoch_public: LeaderInputs,
         _new_epoch: Epoch,
     ) {
-        self.1 = Some(new_epoch_private);
+        self.1 = Some(new_private_inputs_stream);
     }
 
     async fn get_next_core_proof(&mut self) -> Option<BlendLayerProof> {

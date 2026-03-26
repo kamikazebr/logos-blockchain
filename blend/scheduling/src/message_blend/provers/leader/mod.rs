@@ -1,5 +1,3 @@
-use core::pin::pin;
-
 use async_trait::async_trait;
 use futures::stream::{self, Stream, StreamExt as _};
 use lb_blend_message::crypto::{
@@ -149,10 +147,6 @@ fn spawn_proof_generation(
     (proof_receiver, handle)
 }
 
-#[expect(
-    clippy::large_types_passed_by_value,
-    reason = "Spawning an async task. Issues with lifetimes."
-)]
 fn create_proof_stream<SecretInfoStream>(
     public_inputs: PoQVerificationInputsMinusSigningKey,
     secret_info_stream: SecretInfoStream,
@@ -170,7 +164,7 @@ where
         // the number of total copies of the message * number of encapsulations for each
         // copy.
         stream::iter(0..message_quota).then(move |message_release_index| {
-            let public_inputs = public_inputs.clone();
+            let public_inputs = public_inputs;
 
             async move {
                 let leadership_proof = spawn_blocking(move || {

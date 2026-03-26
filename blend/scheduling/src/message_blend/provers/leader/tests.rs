@@ -1,13 +1,16 @@
 use core::time::Duration;
 
-use lb_blend_proofs::selection::inputs::VerifyInputs;
+use futures::{Stream, stream};
+use lb_blend_proofs::{
+    quota::inputs::prove::private::ProofOfLeadershipQuotaInputs, selection::inputs::VerifyInputs,
+};
 use lb_cryptarchia_engine::Epoch;
 use test_log::test;
 use tokio::time::timeout;
 
 use crate::message_blend::provers::{
     ProofsGeneratorSettings,
-    leader::{LeaderProofsGenerator as _, RealLeaderProofsGenerator},
+    leader::{LeaderProofsGenerator, RealLeaderProofsGenerator},
     test_utils::{
         poq_public_inputs_from_session_public_inputs_and_signing_key, valid_proof_of_leader_inputs,
     },
@@ -26,11 +29,14 @@ async fn proof_generation() {
             encapsulation_layers: 1.try_into().unwrap(),
             epoch: Epoch::new(0),
         },
-        private_inputs,
+        stream::repeat(private_inputs),
     );
 
     for _ in 0..leadership_quota {
-        let proof = leader_proofs_generator.get_next_proof().await;
+        let proof = <RealLeaderProofsGenerator as LeaderProofsGenerator<
+            Box<dyn Stream<Item = ProofOfLeadershipQuotaInputs> + Unpin + Send>,
+        >>::get_next_proof(&mut leader_proofs_generator)
+        .await;
         let verified_proof_of_quota = proof
             .proof_of_quota
             .into_inner()
@@ -57,7 +63,9 @@ async fn proof_generation() {
     // maximum cap.
     timeout(
         Duration::from_secs(5),
-        leader_proofs_generator.get_next_proof(),
+        <RealLeaderProofsGenerator as LeaderProofsGenerator<
+            Box<dyn Stream<Item = ProofOfLeadershipQuotaInputs> + Unpin + Send>,
+        >>::get_next_proof(&mut leader_proofs_generator),
     )
     .await
     .unwrap();
@@ -76,10 +84,13 @@ async fn epoch_rotation() {
             encapsulation_layers: 1.try_into().unwrap(),
             epoch: Epoch::new(0),
         },
-        private_inputs,
+        stream::repeat(private_inputs),
     );
 
-    let proof = leader_proofs_generator.get_next_proof().await;
+    let proof = <RealLeaderProofsGenerator as LeaderProofsGenerator<
+        Box<dyn Stream<Item = ProofOfLeadershipQuotaInputs> + Unpin + Send>,
+    >>::get_next_proof(&mut leader_proofs_generator)
+    .await;
     let verified_proof_of_quota = proof
         .proof_of_quota
         .into_inner()
@@ -101,7 +112,10 @@ async fn epoch_rotation() {
         .unwrap();
 
     // Generate and verify new proof.
-    let proof = leader_proofs_generator.get_next_proof().await;
+    let proof = <RealLeaderProofsGenerator as LeaderProofsGenerator<
+        Box<dyn Stream<Item = ProofOfLeadershipQuotaInputs> + Unpin + Send>,
+    >>::get_next_proof(&mut leader_proofs_generator)
+    .await;
     let verified_proof_of_quota = proof
         .proof_of_quota
         .into_inner()
