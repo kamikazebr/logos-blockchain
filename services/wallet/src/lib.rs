@@ -148,7 +148,7 @@ pub struct TipResponse<R> {
     pub response: R,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct UtxoWithKeyId {
     pub utxo: Utxo,
     pub key_id: KeyId,

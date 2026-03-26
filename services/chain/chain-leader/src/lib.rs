@@ -8,7 +8,7 @@ mod relays;
 mod wallet;
 
 use core::fmt::Debug;
-use std::{fmt::Display, iter, pin::Pin, time::Duration};
+use std::{fmt::Display, iter, pin::Pin, sync::Arc, time::Duration};
 
 use futures::{StreamExt as _, stream};
 use lb_chain_network_service::api::{ChainNetworkServiceApi, ChainNetworkServiceData};
@@ -47,7 +47,7 @@ use overwatch::{
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use thiserror::Error;
-use tokio::sync::{oneshot, watch};
+use tokio::sync::{broadcast, oneshot};
 use tracing::{Level, debug, error, info, instrument, span, trace};
 use tracing_futures::Instrument as _;
 
@@ -56,7 +56,7 @@ use crate::{
     blend::BlendAdapter,
     block::BlockProposalStrategy,
     kms::PreloadKmsService,
-    leadership::{PotentialWinningPoLSlotNotifier, build_proof_for},
+    leadership::{PotentialWinningPoLSlotNotifier, WinningSlotsChannel, build_proof_for},
     mempool::{MempoolAdapter as _, adapter::MempoolAdapter},
     relays::CryptarchiaConsensusRelays,
     wallet::{LeaderWalletError, fund_and_sign_leader_claim_tx},
@@ -107,7 +107,7 @@ pub enum LeaderMsg {
     /// * a new consumer subscribes -> the latest value that was sent to all the
     ///   other consumers, if any
     PotentialWinningPolEpochSlotStreamSubscribe {
-        sender: oneshot::Sender<watch::Receiver<Option<WinningPolInfo>>>,
+        sender: oneshot::Sender<(Vec<WinningPolInfo>, broadcast::Receiver<WinningPolInfo>)>,
     },
     Claim {
         sender: oneshot::Sender<Result<(), Error>>,
@@ -155,7 +155,7 @@ pub struct CryptarchiaLeader<
     Wallet: lb_wallet_service::api::WalletServiceData,
 {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
-    winning_pol_epoch_slots_sender: watch::Sender<Option<WinningPolInfo>>,
+    winning_pol_slots_channel: Arc<WinningSlotsChannel>,
 }
 
 impl<
@@ -297,11 +297,9 @@ where
         service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
         _initial_state: Self::State,
     ) -> Result<Self, DynError> {
-        let winning_pol_epoch_slots_sender = watch::Sender::new(None);
-
         Ok(Self {
             service_resources_handle,
-            winning_pol_epoch_slots_sender,
+            winning_pol_slots_channel: Arc::new(WinningSlotsChannel::new(128)),
         })
     }
 
@@ -342,10 +340,8 @@ where
             .notifier()
             .get_updated_settings();
 
-        let mut winning_pol_slot_notifier = PotentialWinningPoLSlotNotifier::new(
-            &ledger_config,
-            &self.winning_pol_epoch_slots_sender,
-        );
+        let mut winning_pol_slot_notifier =
+            PotentialWinningPoLSlotNotifier::new(&ledger_config, &self.winning_pol_slots_channel);
 
         let wallet_api = WalletApi::<Wallet, RuntimeServiceId>::new(
             self.service_resources_handle
@@ -463,7 +459,7 @@ where
                         };
 
                         // If it's a new epoch or the service just started, pre-compute the first winning slot and notify consumers.
-                        winning_pol_slot_notifier.process_epoch(&eligible, latest_tree, &epoch_state, &kms_api).await;
+                        winning_pol_slot_notifier.process_epoch(&eligible, latest_tree, &epoch_state, slot, &kms_api);
 
                        if let Some((proof, signing_key)) = build_proof_for(&eligible, latest_tree, &epoch_state, slot, &winning_pol_slot_notifier, &wallet_api, &kms_api).await {
                             // TODO: spawn as a separate task?
@@ -498,7 +494,7 @@ where
                     }
 
                     Some(msg) = self.service_resources_handle.inbound_relay.next() => {
-                        Self::handle_inbound_message(msg, &self.winning_pol_epoch_slots_sender, &cryptarchia_api, &wallet_api, &wallet_config, relays.mempool_adapter()).await;
+                        Self::handle_inbound_message(msg, &self.winning_pol_slots_channel, &cryptarchia_api, &wallet_api, &wallet_config, relays.mempool_adapter()).await;
                     }
                 }
             }
@@ -741,7 +737,7 @@ where
 
     async fn handle_inbound_message(
         msg: LeaderMsg,
-        winning_pol_epoch_slots_sender: &watch::Sender<Option<WinningPolInfo>>,
+        winning_pol_slots_channel: &WinningSlotsChannel,
         cryptarchia: &CryptarchiaServiceApi<CryptarchiaService, RuntimeServiceId>,
         wallet: &WalletApi<Wallet, RuntimeServiceId>,
         config: &LeaderWalletConfig,
@@ -750,7 +746,7 @@ where
         match msg {
             LeaderMsg::PotentialWinningPolEpochSlotStreamSubscribe { sender } => {
                 sender
-                    .send(winning_pol_epoch_slots_sender.subscribe())
+                    .send(winning_pol_slots_channel.subscribe())
                     .unwrap_or_else(|_| {
                         error!("Could not subscribe to POL epoch winning slots channel.");
                     });

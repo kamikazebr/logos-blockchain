@@ -12,7 +12,7 @@ use lb_pol::{PolChainInputsData, PolWalletInputsData, PolWitnessInputsData};
 use lb_services_utils::wait_until_services_are_ready;
 use overwatch::{overwatch::OverwatchHandle, services::AsServiceId};
 use tokio::sync::oneshot::channel;
-use tokio_stream::wrappers::WatchStream;
+use tokio_stream::wrappers::BroadcastStream;
 
 use crate::CryptarchiaLeaderService;
 
@@ -51,13 +51,13 @@ where
             .send(LeaderMsg::PotentialWinningPolEpochSlotStreamSubscribe { sender })
             .await
             .ok()?;
-        let pol_winning_slot_receiver = receiver.await.ok()?;
-        // Return a `WatchStream` that filters out `None`s (i.e., at the very beginning
-        // of chain leader start), and any leader info that belongs to an already
-        // processed epoch.
+        // The subscription returns a snapshot of all winning slots found so
+        // far plus a live broadcast receiver. For now we only use the live
+        // receiver; consuming the snapshot will be implemented separately.
+        let (_snapshot, pol_winning_slot_receiver) = receiver.await.ok()?;
         Some(Box::new(
-            WatchStream::new(pol_winning_slot_receiver)
-                .filter_map(ready)
+            BroadcastStream::new(pol_winning_slot_receiver)
+                .filter_map(|result| ready(result.ok()))
                 .scan(
                     None,
                     |processed_epoch, (leader_private, leader_public, epoch)| {

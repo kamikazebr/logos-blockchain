@@ -1,4 +1,7 @@
-use std::fmt::{Debug, Display};
+use std::{
+    fmt::{Debug, Display},
+    sync::{Arc, RwLock},
+};
 
 use lb_core::{
     mantle::Utxo,
@@ -14,7 +17,8 @@ use lb_wallet_service::{UtxoWithKeyId, api::WalletApi};
 use overwatch::services::AsServiceId;
 use rand::rngs::OsRng;
 use tokio::{
-    sync::{oneshot, watch::Sender},
+    sync::{broadcast, oneshot},
+    task::JoinHandle,
     time::Instant,
 };
 
@@ -83,7 +87,6 @@ where
                 private_inputs.clone(),
                 public_inputs,
                 epoch_state.epoch,
-                slot,
             );
 
             let res = tokio::task::spawn_blocking(move || {
@@ -173,11 +176,67 @@ pub enum PrivateInputsError {
     LatestNoteNotFound,
 }
 
-/// Process every tick and reacts to the very first one received and the first
-/// one of every new epoch.
+/// A replay-capable broadcast channel for winning slot information.
 ///
-/// Reacting to a tick means pre-calculating the potential winning slots for the
-/// epoch and notifying all consumers via the provided sender channel.
+/// Every sent item is appended to an internal log **and** broadcast to live
+/// receivers. Late subscribers receive a snapshot of the full log together
+/// with a live receiver.
+pub struct WinningSlotsChannel {
+    log: RwLock<Vec<WinningPolInfo>>,
+    sender: broadcast::Sender<WinningPolInfo>,
+}
+
+impl WinningSlotsChannel {
+    pub(crate) fn new(capacity: usize) -> Self {
+        let (sender, _) = broadcast::channel(capacity);
+        Self {
+            log: RwLock::new(Vec::new()),
+            sender,
+        }
+    }
+
+    /// Appends the item to the log and broadcasts it to live receivers.
+    ///
+    /// If no live receivers exist yet the item is still stored in the log and
+    /// will be included in the snapshot returned by [`Self::subscribe`].
+    pub(crate) fn send(&self, info: WinningPolInfo) {
+        self.log
+            .write()
+            .expect("WinningSlotsChannel log poisoned")
+            .push(info.clone());
+        // Broadcast failure (no live receivers) is expected during startup
+        // and is harmless — the data is safe in the log.
+        drop(self.sender.send(info));
+    }
+
+    /// Returns a snapshot of all previously sent items together with a live
+    /// broadcast receiver.
+    ///
+    /// The read-lock is held across both operations so every item is
+    /// guaranteed to appear either in the snapshot **or** in the receiver,
+    /// never both and never missed.
+    pub(crate) fn subscribe(&self) -> (Vec<WinningPolInfo>, broadcast::Receiver<WinningPolInfo>) {
+        let snapshot = self
+            .log
+            .read()
+            .expect("WinningSlotsChannel log poisoned")
+            .clone();
+        let receiver = self.sender.subscribe();
+        (snapshot, receiver)
+    }
+
+    /// Clears the log. Called when a new epoch starts.
+    pub(crate) fn clear(&self) {
+        self.log
+            .write()
+            .expect("WinningSlotsChannel log poisoned")
+            .clear();
+    }
+}
+
+/// Reacts to the first tick received and to the first tick of every new epoch
+/// by spawning a background task that scans all slots in the epoch and sends
+/// every winning slot to consumers via a broadcast channel.
 ///
 /// The term *potential* means that winning slots are computed based on the
 /// notes available at tick-processing time. A note may later be spent before
@@ -185,128 +244,73 @@ pub enum PrivateInputsError {
 /// does not account for such cases.
 pub struct PotentialWinningPoLSlotNotifier<'service> {
     ledger_config: &'service lb_ledger::Config,
-    sender: &'service Sender<Option<WinningPolInfo>>,
-    /// Keeps track of the last processed epoch, if any, and for it the first
-    /// potential winning slot that was pre-computed, if any.
-    last_processed_epoch_and_found_first_winning_slot: Option<(Epoch, Option<Slot>)>,
+    channel: &'service Arc<WinningSlotsChannel>,
+    last_processed_epoch: Option<Epoch>,
+    /// Handle to the background epoch-scanning task, if one is running.
+    scan_handle: Option<JoinHandle<()>>,
 }
 
 impl<'service> PotentialWinningPoLSlotNotifier<'service> {
     pub(super) const fn new(
         ledger_config: &'service lb_ledger::Config,
-        sender: &'service Sender<Option<WinningPolInfo>>,
+        channel: &'service Arc<WinningSlotsChannel>,
     ) -> Self {
         Self {
             ledger_config,
-            sender,
-            last_processed_epoch_and_found_first_winning_slot: None,
+            channel,
+            last_processed_epoch: None,
+            scan_handle: None,
         }
     }
 
-    /// It processes a new unprocessed epoch, and sends over the channel the
-    /// first identified winning slot for this epoch, if any.
-    pub(super) async fn process_epoch<RuntimeServiceId>(
+    /// Spawns a background task that scans every slot in the new epoch
+    /// starting from `starting_slot` and sends all winning slot information
+    /// to consumers. If a scan for a previous epoch is still running it is
+    /// cancelled first.
+    ///
+    /// `starting_slot` allows skipping slots that have already elapsed when
+    /// the service joins an epoch mid-way (e.g. after startup or IBD).
+    pub(super) fn process_epoch<RuntimeServiceId>(
         &mut self,
         utxos: &[UtxoWithKeyId],
         latest_tree: &UtxoTree,
         epoch_state: &EpochState,
-        kms: &(impl KmsAdapter<RuntimeServiceId, KeyId = KeyId> + Sync),
-    ) {
-        if let Some((last_processed_epoch, _)) =
-            self.last_processed_epoch_and_found_first_winning_slot
-        {
-            if last_processed_epoch == epoch_state.epoch {
+        starting_slot: Slot,
+        kms: &(impl KmsAdapter<RuntimeServiceId, KeyId = KeyId> + Clone + Send + Sync + 'static),
+    ) where
+        RuntimeServiceId: Send + 'static,
+    {
+        if let Some(last_epoch) = self.last_processed_epoch {
+            if last_epoch == epoch_state.epoch {
                 tracing::trace!("Skipping already processed epoch.");
                 return;
-            } else if last_processed_epoch > epoch_state.epoch {
+            } else if last_epoch > epoch_state.epoch {
                 tracing::error!(
-                    "Received an epoch smaller than the last process one. This is invalid."
+                    "Received an epoch smaller than the last processed one. This is invalid."
                 );
                 return;
             }
         }
         tracing::debug!("Processing new epoch: {:?}", epoch_state.epoch);
 
-        self.check_epoch_winning_utxos(utxos, latest_tree, epoch_state, kms)
-            .await;
-    }
-
-    async fn check_epoch_winning_utxos<RuntimeServiceId>(
-        &mut self,
-        utxos: &[UtxoWithKeyId],
-        latest_tree: &UtxoTree,
-        epoch_state: &EpochState,
-        kms: &(impl KmsAdapter<RuntimeServiceId, KeyId = KeyId> + Sync),
-    ) {
-        let slots_per_epoch = self.ledger_config.epoch_length();
-        let epoch_starting_slot: u64 = self
-            .ledger_config
-            .epoch_config
-            .starting_slot(&epoch_state.epoch, self.ledger_config.base_period_length())
-            .into();
-
-        let mut first_winning_slot: Option<Slot> = None;
-        let start = Instant::now();
-        for UtxoWithKeyId { utxo, key_id } in utxos {
-            for offset in 0..slots_per_epoch {
-                let slot = epoch_starting_slot
-                    .checked_add(offset)
-                    .expect("Slot calculation overflow.");
-                let public_inputs = public_inputs_for_slot(epoch_state, slot.into(), latest_tree);
-                let winning = kms
-                    .check_winning_with_key(key_id.clone(), utxo, &public_inputs)
-                    .await;
-                if !winning {
-                    continue;
-                }
-
-                // Note: We discard the signing key here since this is just for pre-computing
-                // winning slots. The actual signing key will be generated when building the
-                // proof.
-                let private_inputs_result = kms
-                    .build_private_inputs_for_winning_utxo_and_slot(
-                        key_id.clone(),
-                        utxo,
-                        epoch_state,
-                        public_inputs,
-                        latest_tree,
-                    )
-                    .await;
-                let (leader_private, _signing_key) = match private_inputs_result {
-                    Ok(result) => result,
-                    Err(e) => {
-                        tracing::error!(
-                            "Failed to build private inputs for winning utxo {:?} for {slot:?}: {e:?}",
-                            utxo.id(),
-                        );
-                        continue;
-                    }
-                };
-
-                if self
-                    .sender
-                    .send(Some((leader_private, public_inputs, epoch_state.epoch)))
-                    .is_err()
-                {
-                    tracing::debug!(
-                        "No active listeners for pre-calculated PoL winning slots. Not broadcasting."
-                    );
-                } else {
-                    // We stop the iteration as soon as the first winning slot for this epoch is
-                    // found and was successfully communicated to consumers.
-                    first_winning_slot = Some(slot.into());
-                    break;
-                }
-            }
+        // Cancel any in-progress scan from a previous epoch.
+        if let Some(handle) = self.scan_handle.take() {
+            handle.abort();
         }
-        tracing::debug!(
-            "Found all winning utxos for epoch {:?} in {:?} ms",
-            epoch_state.epoch,
-            start.elapsed().as_millis()
-        );
 
-        self.last_processed_epoch_and_found_first_winning_slot =
-            Some((epoch_state.epoch, first_winning_slot));
+        self.last_processed_epoch = Some(epoch_state.epoch);
+
+        self.channel.clear();
+
+        self.scan_handle = Some(tokio::spawn(scan_epoch_winning_slots(
+            utxos.to_vec(),
+            latest_tree.clone(),
+            epoch_state.clone(),
+            starting_slot,
+            self.ledger_config.clone(),
+            kms.clone(),
+            Arc::clone(self.channel),
+        )));
     }
 
     /// Send the information about a winning slot to consumers.
@@ -317,36 +321,109 @@ impl<'service> PotentialWinningPoLSlotNotifier<'service> {
         private_inputs: LeaderPrivate,
         public_inputs: LeaderPublic,
         epoch: Epoch,
-        slot: Slot,
     ) {
-        // If we are trying to notify about the first winning slot that we already
-        // pre-computed, ignore it.
-        if let Some((_, Some(first_epoch_winning_slot))) =
-            self.last_processed_epoch_and_found_first_winning_slot
-            && first_epoch_winning_slot == slot
-        {
+        self.channel.send((private_inputs, public_inputs, epoch));
+    }
+}
+
+/// Scans all slots in the epoch and sends every winning slot to the broadcast
+/// channel. Slots are scanned in order so that the nearest winning slots are
+/// discovered and communicated to consumers first.
+async fn scan_epoch_winning_slots<RuntimeServiceId>(
+    utxos: Vec<UtxoWithKeyId>,
+    latest_tree: UtxoTree,
+    epoch_state: EpochState,
+    starting_slot: Slot,
+    ledger_config: lb_ledger::Config,
+    kms: impl KmsAdapter<RuntimeServiceId, KeyId = KeyId> + Sync,
+    channel: Arc<WinningSlotsChannel>,
+) {
+    let epoch_starting_slot = ledger_config
+        .epoch_config
+        .starting_slot(&epoch_state.epoch, ledger_config.base_period_length())
+        .into_inner();
+    let epoch_end_slot = epoch_starting_slot
+        .checked_add(ledger_config.epoch_length())
+        .expect("Slot calculation overflow.");
+    let scan_from = {
+        let starting_inner = starting_slot.into_inner();
+        if starting_inner < epoch_starting_slot {
             tracing::warn!(
-                "Skipping notifying about winning slot {slot:?} because it was already processed"
+                "Specified starting slot is before the start of the epoch. Using epoch starting slot as default."
             );
-            return;
+            epoch_starting_slot
+        } else if starting_inner > epoch_end_slot {
+            tracing::warn!(
+                "Specified starting slot is after the end of the epoch. Using epoch last slot as default."
+            );
+            epoch_end_slot
+        } else {
+            starting_inner
+        }
+    };
+
+    let start = Instant::now();
+    let mut winning_count: u64 = 0;
+
+    // Iterate slots (outer) then UTXOs (inner) so that the nearest winning
+    // slots are found first. Slots before `starting_slot` are skipped — as they are
+    // considered to have already elapsed.
+    for slot_number in scan_from..epoch_end_slot {
+        let slot: Slot = slot_number.into();
+        let public_inputs = public_inputs_for_slot(&epoch_state, slot, &latest_tree);
+
+        for UtxoWithKeyId { utxo, key_id } in &*utxos {
+            let winning = kms
+                .check_winning_with_key(key_id.clone(), utxo, &public_inputs)
+                .await;
+            if !winning {
+                continue;
+            }
+
+            // Note: We discard the signing key here since this is just for
+            // pre-computing winning slots. The actual signing key will be
+            // generated when building the proof.
+            let private_inputs_result = kms
+                .build_private_inputs_for_winning_utxo_and_slot(
+                    key_id.clone(),
+                    utxo,
+                    &epoch_state,
+                    public_inputs,
+                    &latest_tree,
+                )
+                .await;
+            let (leader_private, _signing_key) = match private_inputs_result {
+                Ok(result) => result,
+                Err(e) => {
+                    tracing::error!(
+                        "Failed to build private inputs for winning utxo {:?} for {slot:?}: {e:?}",
+                        utxo.id(),
+                    );
+                    continue;
+                }
+            };
+
+            channel.send((leader_private, public_inputs, epoch_state.epoch));
+            winning_count += 1;
         }
 
-        if self
-            .sender
-            .send(Some((private_inputs, public_inputs, epoch)))
-            .is_err()
-        {
-            tracing::debug!(
-                "No active listeners for pre-calculated PoL winning slots. Not broadcasting."
-            );
+        // Yield cooperatively every 100 slots to avoid starving other tasks.
+        if slot_number % 100 == 0 {
+            tokio::task::yield_now().await;
         }
     }
+
+    tracing::debug!(
+        "Found {winning_count} winning slots for epoch {:?} in {:?} ms",
+        epoch_state.epoch,
+        start.elapsed().as_millis()
+    );
 }
 
 #[cfg(test)]
 mod pol_tests {
     use core::fmt;
-    use std::{fmt::Formatter, num::NonZero, slice, sync::Arc};
+    use std::{fmt::Formatter, num::NonZero, slice};
 
     use lb_core::{
         mantle::{
@@ -369,7 +446,7 @@ mod pol_tests {
         relay::OutboundRelay,
         state::{NoOperator, NoState},
     };
-    use tokio::sync::{mpsc, watch};
+    use tokio::sync::mpsc;
 
     use super::*;
 
@@ -409,8 +486,8 @@ mod pol_tests {
         };
 
         // Create notifier channel (not used in this test)
-        let (sender, _receiver) = watch::channel(None);
-        let notifier = PotentialWinningPoLSlotNotifier::new(&config, &sender);
+        let channel = Arc::new(WinningSlotsChannel::new(128));
+        let notifier = PotentialWinningPoLSlotNotifier::new(&config, &channel);
 
         // Create dummy wallet service
         let wallet = DummyWallet::spawn();
