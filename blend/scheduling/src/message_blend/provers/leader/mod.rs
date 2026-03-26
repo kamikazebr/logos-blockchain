@@ -70,7 +70,7 @@ impl LeaderProofsGenerator for RealLeaderProofsGenerator {
     ) -> Self {
         let (proof_receiver, proof_generation_task_handle) = spawn_proof_generation(
             create_proof_stream(settings.public_inputs, private_inputs),
-            settings.encapsulation_layers.get() as usize,
+            settings.public_inputs.leader.message_quota as usize,
         );
 
         Self {
@@ -117,7 +117,7 @@ impl RealLeaderProofsGenerator {
 
         let (proof_receiver, generation_task) = spawn_proof_generation(
             create_proof_stream(self.settings.public_inputs, self.private_inputs),
-            self.settings.encapsulation_layers.get() as usize,
+            self.settings.public_inputs.leader.message_quota as usize,
         );
         self.proof_receiver = proof_receiver;
         self.proof_generation_task_handle = generation_task;
