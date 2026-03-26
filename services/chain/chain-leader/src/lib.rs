@@ -56,7 +56,7 @@ use crate::{
     blend::BlendAdapter,
     block::BlockProposalStrategy,
     kms::PreloadKmsService,
-    leadership::{PotentialWinningPoLSlotNotifier, WinningSlotsChannel, build_proof_for},
+    leadership::{EpochWinningSlotsChannel, PotentialWinningPoLSlotNotifier, build_proof_for},
     mempool::{MempoolAdapter as _, adapter::MempoolAdapter},
     relays::CryptarchiaConsensusRelays,
     wallet::{LeaderWalletError, fund_and_sign_leader_claim_tx},
@@ -155,7 +155,7 @@ pub struct CryptarchiaLeader<
     Wallet: lb_wallet_service::api::WalletServiceData,
 {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
-    winning_pol_slots_channel: Arc<WinningSlotsChannel>,
+    winning_pol_slots_channel: Arc<EpochWinningSlotsChannel>,
 }
 
 impl<
@@ -299,7 +299,7 @@ where
     ) -> Result<Self, DynError> {
         Ok(Self {
             service_resources_handle,
-            winning_pol_slots_channel: Arc::new(WinningSlotsChannel::new(128)),
+            winning_pol_slots_channel: Arc::new(EpochWinningSlotsChannel::new(64)),
         })
     }
 
@@ -340,8 +340,10 @@ where
             .notifier()
             .get_updated_settings();
 
-        let mut winning_pol_slot_notifier =
-            PotentialWinningPoLSlotNotifier::new(&ledger_config, &self.winning_pol_slots_channel);
+        let mut winning_pol_slot_notifier = PotentialWinningPoLSlotNotifier::new(
+            &ledger_config,
+            Arc::clone(&self.winning_pol_slots_channel),
+        );
 
         let wallet_api = WalletApi::<Wallet, RuntimeServiceId>::new(
             self.service_resources_handle
@@ -461,7 +463,7 @@ where
                         // If it's a new epoch or the service just started, pre-compute the first winning slot and notify consumers.
                         winning_pol_slot_notifier.process_epoch(&eligible, latest_tree, &epoch_state, slot, &kms_api);
 
-                       if let Some((proof, signing_key)) = build_proof_for(&eligible, latest_tree, &epoch_state, slot, &winning_pol_slot_notifier, &wallet_api, &kms_api).await {
+                       if let Some((proof, signing_key)) = build_proof_for(&eligible, latest_tree, &epoch_state, slot, &wallet_api, &kms_api).await {
                             // TODO: spawn as a separate task?
                             match Self::propose_block(
                                 parent,
@@ -737,7 +739,7 @@ where
 
     async fn handle_inbound_message(
         msg: LeaderMsg,
-        winning_pol_slots_channel: &WinningSlotsChannel,
+        winning_pol_slots_channel: &EpochWinningSlotsChannel,
         cryptarchia: &CryptarchiaServiceApi<CryptarchiaService, RuntimeServiceId>,
         wallet: &WalletApi<Wallet, RuntimeServiceId>,
         config: &LeaderWalletConfig,

@@ -29,17 +29,17 @@ use crate::{WinningPolInfo, kms::KmsAdapter};
 ///
 /// If the slot is not a winning one, it returns `None` and no consumer is
 /// notified.
-pub async fn build_proof_for<Wallet, RuntimeServiceId>(
+pub async fn build_proof_for<Wallet, Kms, RuntimeServiceId>(
     utxos: &[UtxoWithKeyId],
     latest_tree: &UtxoTree,
     epoch_state: &EpochState,
     slot: Slot,
-    winning_pol_info_notifier: &PotentialWinningPoLSlotNotifier<'_>,
     wallet: &WalletApi<Wallet, RuntimeServiceId>,
-    kms: &(impl KmsAdapter<RuntimeServiceId, KeyId = KeyId> + Sync),
+    kms: &Kms,
 ) -> Option<(Groth16LeaderProof, Ed25519Key)>
 where
     Wallet: lb_wallet_service::api::WalletServiceData,
+    Kms: KmsAdapter<RuntimeServiceId, KeyId = KeyId> + Sync,
     RuntimeServiceId: Debug + Display + Sync + AsServiceId<Wallet>,
 {
     for UtxoWithKeyId { utxo, key_id } in utxos {
@@ -82,12 +82,6 @@ where
                     continue;
                 }
             };
-
-            winning_pol_info_notifier.notify_about_winning_slot(
-                private_inputs.clone(),
-                public_inputs,
-                epoch_state.epoch,
-            );
 
             let res = tokio::task::spawn_blocking(move || {
                 Groth16LeaderProof::prove(private_inputs, voucher_cm)
@@ -181,13 +175,15 @@ pub enum PrivateInputsError {
 /// Every sent item is appended to an internal log **and** broadcast to live
 /// receivers. Late subscribers receive a snapshot of the full log together
 /// with a live receiver.
-pub struct WinningSlotsChannel {
+///
+/// The channel is reset on epoch changes.
+pub struct EpochWinningSlotsChannel {
     log: RwLock<Vec<WinningPolInfo>>,
     sender: broadcast::Sender<WinningPolInfo>,
 }
 
-impl WinningSlotsChannel {
-    pub(crate) fn new(capacity: usize) -> Self {
+impl EpochWinningSlotsChannel {
+    pub fn new(capacity: usize) -> Self {
         let (sender, _) = broadcast::channel(capacity);
         Self {
             log: RwLock::new(Vec::new()),
@@ -199,7 +195,7 @@ impl WinningSlotsChannel {
     ///
     /// If no live receivers exist yet the item is still stored in the log and
     /// will be included in the snapshot returned by [`Self::subscribe`].
-    pub(crate) fn send(&self, info: WinningPolInfo) {
+    pub fn send(&self, info: WinningPolInfo) {
         self.log
             .write()
             .expect("WinningSlotsChannel log poisoned")
@@ -215,7 +211,7 @@ impl WinningSlotsChannel {
     /// The read-lock is held across both operations so every item is
     /// guaranteed to appear either in the snapshot **or** in the receiver,
     /// never both and never missed.
-    pub(crate) fn subscribe(&self) -> (Vec<WinningPolInfo>, broadcast::Receiver<WinningPolInfo>) {
+    pub fn subscribe(&self) -> (Vec<WinningPolInfo>, broadcast::Receiver<WinningPolInfo>) {
         let snapshot = self
             .log
             .read()
@@ -226,7 +222,7 @@ impl WinningSlotsChannel {
     }
 
     /// Clears the log. Called when a new epoch starts.
-    pub(crate) fn clear(&self) {
+    fn clear(&self) {
         self.log
             .write()
             .expect("WinningSlotsChannel log poisoned")
@@ -244,7 +240,7 @@ impl WinningSlotsChannel {
 /// does not account for such cases.
 pub struct PotentialWinningPoLSlotNotifier<'service> {
     ledger_config: &'service lb_ledger::Config,
-    channel: &'service Arc<WinningSlotsChannel>,
+    channel: Arc<EpochWinningSlotsChannel>,
     last_processed_epoch: Option<Epoch>,
     /// Handle to the background epoch-scanning task, if one is running.
     scan_handle: Option<JoinHandle<()>>,
@@ -253,7 +249,7 @@ pub struct PotentialWinningPoLSlotNotifier<'service> {
 impl<'service> PotentialWinningPoLSlotNotifier<'service> {
     pub(super) const fn new(
         ledger_config: &'service lb_ledger::Config,
-        channel: &'service Arc<WinningSlotsChannel>,
+        channel: Arc<EpochWinningSlotsChannel>,
     ) -> Self {
         Self {
             ledger_config,
@@ -261,6 +257,14 @@ impl<'service> PotentialWinningPoLSlotNotifier<'service> {
             last_processed_epoch: None,
             scan_handle: None,
         }
+    }
+
+    fn clear_old_epoch(&mut self) {
+        // Cancel any in-progress scan from a previous epoch.
+        if let Some(handle) = self.scan_handle.take() {
+            handle.abort();
+        }
+        self.channel.clear();
     }
 
     /// Spawns a background task that scans every slot in the new epoch
@@ -294,13 +298,9 @@ impl<'service> PotentialWinningPoLSlotNotifier<'service> {
         tracing::debug!("Processing new epoch: {:?}", epoch_state.epoch);
 
         // Cancel any in-progress scan from a previous epoch.
-        if let Some(handle) = self.scan_handle.take() {
-            handle.abort();
-        }
+        self.clear_old_epoch();
 
         self.last_processed_epoch = Some(epoch_state.epoch);
-
-        self.channel.clear();
 
         self.scan_handle = Some(tokio::spawn(scan_epoch_winning_slots(
             utxos.to_vec(),
@@ -309,35 +309,25 @@ impl<'service> PotentialWinningPoLSlotNotifier<'service> {
             starting_slot,
             self.ledger_config.clone(),
             kms.clone(),
-            Arc::clone(self.channel),
+            Arc::clone(&self.channel),
         )));
-    }
-
-    /// Send the information about a winning slot to consumers.
-    ///
-    /// No check is performed on whether the slot is actually a winning one.
-    pub(super) fn notify_about_winning_slot(
-        &self,
-        private_inputs: LeaderPrivate,
-        public_inputs: LeaderPublic,
-        epoch: Epoch,
-    ) {
-        self.channel.send((private_inputs, public_inputs, epoch));
     }
 }
 
 /// Scans all slots in the epoch and sends every winning slot to the broadcast
 /// channel. Slots are scanned in order so that the nearest winning slots are
 /// discovered and communicated to consumers first.
-async fn scan_epoch_winning_slots<RuntimeServiceId>(
+async fn scan_epoch_winning_slots<Kms, RuntimeServiceId>(
     utxos: Vec<UtxoWithKeyId>,
     latest_tree: UtxoTree,
     epoch_state: EpochState,
     starting_slot: Slot,
     ledger_config: lb_ledger::Config,
-    kms: impl KmsAdapter<RuntimeServiceId, KeyId = KeyId> + Sync,
-    channel: Arc<WinningSlotsChannel>,
-) {
+    kms: Kms,
+    channel: Arc<EpochWinningSlotsChannel>,
+) where
+    Kms: KmsAdapter<RuntimeServiceId, KeyId = KeyId> + Sync,
+{
     let epoch_starting_slot = ledger_config
         .epoch_config
         .starting_slot(&epoch_state.epoch, ledger_config.base_period_length())
@@ -372,7 +362,7 @@ async fn scan_epoch_winning_slots<RuntimeServiceId>(
         let slot: Slot = slot_number.into();
         let public_inputs = public_inputs_for_slot(&epoch_state, slot, &latest_tree);
 
-        for UtxoWithKeyId { utxo, key_id } in &*utxos {
+        for UtxoWithKeyId { utxo, key_id } in &utxos {
             let winning = kms
                 .check_winning_with_key(key_id.clone(), utxo, &public_inputs)
                 .await;
@@ -392,7 +382,7 @@ async fn scan_epoch_winning_slots<RuntimeServiceId>(
                     &latest_tree,
                 )
                 .await;
-            let (leader_private, _signing_key) = match private_inputs_result {
+            let (leader_private, _) = match private_inputs_result {
                 Ok(result) => result,
                 Err(e) => {
                     tracing::error!(
@@ -485,10 +475,6 @@ mod pol_tests {
             lottery_1,
         };
 
-        // Create notifier channel (not used in this test)
-        let channel = Arc::new(WinningSlotsChannel::new(128));
-        let notifier = PotentialWinningPoLSlotNotifier::new(&config, &channel);
-
         // Create dummy wallet service
         let wallet = DummyWallet::spawn();
 
@@ -498,7 +484,6 @@ mod pol_tests {
             UtxoWithKeyId { utxo, key_id },
             &epoch_state,
             &latest_tree,
-            &notifier,
             &wallet,
             &kms,
         )
@@ -527,7 +512,6 @@ mod pol_tests {
         utxo: UtxoWithKeyId,
         epoch_state: &EpochState,
         latest_tree: &UtxoTree,
-        notifier: &PotentialWinningPoLSlotNotifier<'_>,
         wallet: &WalletApi<DummyWallet, TestRuntimeServiceId>,
         kms: &(impl KmsAdapter<TestRuntimeServiceId, KeyId = KeyId> + Sync),
     ) -> Option<(Groth16LeaderProof, Slot)> {
@@ -537,7 +521,6 @@ mod pol_tests {
                 latest_tree,
                 epoch_state,
                 slot,
-                notifier,
                 wallet,
                 kms,
             )
