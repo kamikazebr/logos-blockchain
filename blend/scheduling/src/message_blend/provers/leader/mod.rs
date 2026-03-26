@@ -1,3 +1,5 @@
+use core::pin::pin;
+
 use async_trait::async_trait;
 use futures::stream::{self, Stream, StreamExt as _};
 use lb_blend_message::crypto::{
@@ -32,17 +34,16 @@ const LOG_TARGET: &str = "blend::scheduling::proofs::leader";
 /// A `PoQ` generator that deals only with leadership proofs, suitable for edge
 /// nodes.
 #[async_trait]
-pub trait LeaderProofsGenerator: Sized {
+pub trait LeaderProofsGenerator<SecretInfoStream>: Sized {
     /// Instantiate a new generator with the provided public inputs and secret
     /// `PoL` values.
-    fn new(settings: ProofsGeneratorSettings, private_inputs: ProofOfLeadershipQuotaInputs)
-    -> Self;
+    fn new(settings: ProofsGeneratorSettings, private_inputs_stream: SecretInfoStream) -> Self;
     /// Signal an epoch transition in the middle of the current session, with
     /// new public and secret inputs.
     fn rotate_epoch(
         &mut self,
         new_epoch_public: LeaderInputs,
-        new_private_inputs: ProofOfLeadershipQuotaInputs,
+        new_private_inputs_stream: SecretInfoStream,
         new_epoch: Epoch,
     );
     /// Get the next leadership proof.
@@ -51,7 +52,6 @@ pub trait LeaderProofsGenerator: Sized {
 
 pub struct RealLeaderProofsGenerator {
     pub(super) settings: ProofsGeneratorSettings,
-    private_inputs: ProofOfLeadershipQuotaInputs,
     proof_receiver: mpsc::Receiver<BlendLayerProof>,
     proof_generation_task_handle: JoinHandle<()>,
 }
@@ -63,19 +63,18 @@ impl Drop for RealLeaderProofsGenerator {
 }
 
 #[async_trait]
-impl LeaderProofsGenerator for RealLeaderProofsGenerator {
-    fn new(
-        settings: ProofsGeneratorSettings,
-        private_inputs: ProofOfLeadershipQuotaInputs,
-    ) -> Self {
+impl<SecretInfoStream> LeaderProofsGenerator<SecretInfoStream> for RealLeaderProofsGenerator
+where
+    SecretInfoStream: Stream<Item = ProofOfLeadershipQuotaInputs> + Send + 'static,
+{
+    fn new(settings: ProofsGeneratorSettings, private_inputs_stream: SecretInfoStream) -> Self {
         let (proof_receiver, proof_generation_task_handle) = spawn_proof_generation(
-            create_proof_stream(settings.public_inputs, private_inputs),
+            create_proof_stream(settings.public_inputs, private_inputs_stream),
             settings.public_inputs.leader.message_quota as usize,
         );
 
         Self {
             settings,
-            private_inputs,
             proof_receiver,
             proof_generation_task_handle,
         }
@@ -84,7 +83,7 @@ impl LeaderProofsGenerator for RealLeaderProofsGenerator {
     fn rotate_epoch(
         &mut self,
         new_epoch_public: LeaderInputs,
-        new_private: ProofOfLeadershipQuotaInputs,
+        new_private_inputs_stream: SecretInfoStream,
         new_epoch: Epoch,
     ) {
         tracing::info!(target: LOG_TARGET, "Rotating epoch...");
@@ -93,10 +92,9 @@ impl LeaderProofsGenerator for RealLeaderProofsGenerator {
         // PoL relevant parts.
         self.settings.public_inputs.leader = new_epoch_public;
         self.settings.epoch = new_epoch;
-        self.private_inputs = new_private;
 
         // Compute new proofs with the updated settings.
-        self.generate_new_proofs_stream();
+        self.generate_new_proofs_stream(new_private_inputs_stream);
     }
 
     async fn get_next_proof(&mut self) -> BlendLayerProof {
@@ -112,11 +110,14 @@ impl LeaderProofsGenerator for RealLeaderProofsGenerator {
 }
 
 impl RealLeaderProofsGenerator {
-    fn generate_new_proofs_stream(&mut self) {
+    fn generate_new_proofs_stream<SecretInfoStream>(&mut self, secret_info_stream: SecretInfoStream)
+    where
+        SecretInfoStream: Stream<Item = ProofOfLeadershipQuotaInputs> + Send + 'static,
+    {
         self.proof_generation_task_handle.abort();
 
         let (proof_receiver, generation_task) = spawn_proof_generation(
-            create_proof_stream(self.settings.public_inputs, self.private_inputs),
+            create_proof_stream(self.settings.public_inputs, secret_info_stream),
             self.settings.public_inputs.leader.message_quota as usize,
         );
         self.proof_receiver = proof_receiver;
@@ -152,27 +153,24 @@ fn spawn_proof_generation(
     clippy::large_types_passed_by_value,
     reason = "Spawning an async task. Issues with lifetimes."
 )]
-fn create_proof_stream(
+fn create_proof_stream<SecretInfoStream>(
     public_inputs: PoQVerificationInputsMinusSigningKey,
-    private_inputs: ProofOfLeadershipQuotaInputs,
-) -> impl Stream<Item = BlendLayerProof> {
+    secret_info_stream: SecretInfoStream,
+) -> impl Stream<Item = BlendLayerProof>
+where
+    SecretInfoStream: Stream<Item = ProofOfLeadershipQuotaInputs>,
+{
     let message_quota = public_inputs.leader.message_quota;
     tracing::debug!(target: LOG_TARGET, "Generating leadership quota proofs starting with public inputs: {public_inputs:?}.");
 
-    stream::iter(0u64..)
-        .then(move |current_index| {
-            // This represents the total number of encapsulations sent out for each message.
-            // E.g., for a session with data message replication factor of `1`, we get
-            // indices `0` to `2` that belong to the first copy encapsulation, and indices
-            // `3` to `5` that belong to the second copy encapsulation.
-            // In the end, because the expected maximum message quota is `6` (if we take `3`
-            // as the blending operations per message), we end up with two,
-            // fully-encapsulated copies of the same original message, with valid proofs
-            // because within the expected index value.
-            // The logic on how these indices are mapped to each message + encapsulation
-            // layer is out of scope for this component, and will be up to the
-            // message scheduler.
-            let message_release_index = current_index % message_quota;
+    secret_info_stream.flat_map(move |next_secret_info| {
+        // For each winning slot, generate `message_quota` proofs.
+        // TODO: Replace this logic with returning a single element that contains all
+        // the needed proofs to send out `N` copies of the block proposal, where `N` is
+        // the number of total copies of the message * number of encapsulations for each
+        // copy.
+        stream::iter(0..message_quota).then(move |message_release_index| {
+            let public_inputs = public_inputs.clone();
 
             async move {
                 let leadership_proof = spawn_blocking(move || {
@@ -186,20 +184,26 @@ fn create_proof_stream(
                         },
                         PrivateInputs::new_proof_of_leadership_quota_inputs(
                             message_release_index,
-                            private_inputs,
+                            next_secret_info,
                         ),
                     )
                     .expect("Leadership PoQ proof creation should not fail.");
-                    let proof_of_selection = VerifiedProofOfSelection::new(secret_selection_randomness);
+
+                    let proof_of_selection =
+                        VerifiedProofOfSelection::new(secret_selection_randomness);
+
                     BlendLayerProof {
                         proof_of_quota,
                         proof_of_selection,
                         ephemeral_signing_key,
                     }
-                }).await.expect("Spawning task for leadership proof generation should not fail.");
+                })
+                .await
+                .expect("Spawning task for leadership proof generation should not fail.");
 
                 tracing::trace!(target: LOG_TARGET, "Generated leadership PoQ within the stream for message release index {message_release_index:?} with key nullifier {:?}  and public key {:?}.", hex::encode(fr_to_bytes(&leadership_proof.proof_of_quota.key_nullifier())), leadership_proof.ephemeral_signing_key.public_key());
                 leadership_proof
             }
         })
+    })
 }

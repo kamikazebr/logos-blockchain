@@ -1,6 +1,7 @@
 use core::cmp::Ordering;
 
 use async_trait::async_trait;
+use futures::Stream;
 use lb_blend_message::crypto::proofs::PoQVerificationInputsMinusSigningKey;
 use lb_blend_proofs::quota::inputs::prove::{
     private::ProofOfLeadershipQuotaInputs, public::LeaderInputs,
@@ -29,7 +30,7 @@ const LOG_TARGET: &str = "blend::scheduling::proofs::core-and-leader";
 /// providing new (public) epoch information, so as not to block cover message
 /// generation for those nodes with low stake.
 #[async_trait]
-pub trait CoreAndLeaderProofsGenerator<CorePoQGenerator>: Sized {
+pub trait CoreAndLeaderProofsGenerator<CorePoQGenerator, SecretInfoStream>: Sized {
     /// Instantiate a new generator for the duration of a session.
     fn new(
         settings: ProofsGeneratorSettings,
@@ -45,7 +46,7 @@ pub trait CoreAndLeaderProofsGenerator<CorePoQGenerator>: Sized {
     /// will be able to provide leadership `PoQ` variants.
     fn set_epoch_private(
         &mut self,
-        new_epoch_private: ProofOfLeadershipQuotaInputs,
+        new_private_inputs_stream: SecretInfoStream,
         new_epoch_public: LeaderInputs,
         new_epoch: Epoch,
     );
@@ -73,10 +74,12 @@ impl<CorePoQGenerator> RealCoreAndLeaderProofsGenerator<CorePoQGenerator> {
 }
 
 #[async_trait]
-impl<CorePoQGenerator> CoreAndLeaderProofsGenerator<CorePoQGenerator>
+impl<CorePoQGenerator, SecretInfoStream>
+    CoreAndLeaderProofsGenerator<CorePoQGenerator, SecretInfoStream>
     for RealCoreAndLeaderProofsGenerator<CorePoQGenerator>
 where
     CorePoQGenerator: CoreProofOfQuotaGenerator + Clone + Send + Sync + 'static,
+    SecretInfoStream: Stream<Item = ProofOfLeadershipQuotaInputs> + Send + 'static,
 {
     fn new(
         settings: ProofsGeneratorSettings,
@@ -134,7 +137,7 @@ where
     // secret.
     fn set_epoch_private(
         &mut self,
-        new_epoch_private: ProofOfLeadershipQuotaInputs,
+        new_private_inputs_stream: SecretInfoStream,
         new_epoch_public: LeaderInputs,
         new_epoch: Epoch,
     ) {
@@ -160,7 +163,7 @@ where
                 },
                 encapsulation_layers: self.core_proofs_generator.settings.encapsulation_layers,
             },
-            new_epoch_private,
+            new_private_inputs_stream,
         ));
     }
 
