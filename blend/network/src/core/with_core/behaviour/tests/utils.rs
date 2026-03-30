@@ -153,7 +153,7 @@ impl BehaviourBuilder {
             connections_waiting_upgrade: HashMap::new(),
             events: VecDeque::new(),
             waker: None,
-            exchanged_message_identifiers: HashMap::new(),
+            received_message_map: HashMap::new(),
             observation_window_clock_provider: self
                 .provider
                 .unwrap_or_else(|| IntervalProviderBuilder::default().build()),

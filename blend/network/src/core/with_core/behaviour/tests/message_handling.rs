@@ -62,7 +62,7 @@ async fn message_sending_and_reception() {
     assert_eq!(
         dialing_swarm
             .behaviour()
-            .exchanged_message_identifiers
+            .received_message_map
             .get(listening_swarm.local_peer_id())
             .unwrap()
             .keys()
@@ -271,7 +271,7 @@ async fn duplicate_message_within_sensitivity_interval_is_not_spam() {
     assert_eq!(
         dialing_swarm
             .behaviour()
-            .exchanged_message_identifiers
+            .received_message_map
             .get(listening_swarm.local_peer_id())
             .unwrap()
             .keys()
@@ -291,7 +291,7 @@ async fn duplicate_message_within_sensitivity_interval_is_not_spam() {
     assert_eq!(
         listening_swarm
             .behaviour()
-            .exchanged_message_identifiers
+            .received_message_map
             .get(dialing_swarm.local_peer_id())
             .unwrap()
             .keys()
