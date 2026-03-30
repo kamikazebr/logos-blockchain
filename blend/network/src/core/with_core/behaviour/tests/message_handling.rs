@@ -52,21 +52,24 @@ async fn message_sending_and_reception() {
             listening_event = listening_swarm.select_next_some() => {
                 if let SwarmEvent::Behaviour(Event::Message(encapsulated_message, (peer_id, _))) = listening_event {
                     assert_eq!(peer_id, *dialing_swarm.local_peer_id());
-                    assert_eq!(*encapsulated_message, EncapsulatedMessage::from(test_message.clone()).verify_public_header(&AlwaysTrueVerifier).unwrap());
+                    assert_eq!(*encapsulated_message, EncapsulatedMessage::from(test_message.clone()).verify_public_header_signature().unwrap());
                     break;
                 }
             }
         }
     }
 
-    assert_eq!(
+    assert!(
         dialing_swarm
             .behaviour()
-            .received_message_map
-            .get(listening_swarm.local_peer_id())
-            .unwrap()
-            .keys()
-            .copied()
+            .message_cache
+            .is_message_processed(&test_message_id)
+    );
+    assert_eq!(
+        listening_swarm
+            .behaviour()
+            .message_cache
+            .messages_from_peer(dialing_swarm.local_peer_id())
             .collect::<HashSet<_>>(),
         vec![test_message_id].into_iter().collect::<HashSet<_>>()
     );
@@ -268,16 +271,11 @@ async fn duplicate_message_within_sensitivity_interval_is_not_spam() {
             .negotiated_state,
         NegotiatedPeerState::Healthy
     );
-    assert_eq!(
+    assert!(
         dialing_swarm
             .behaviour()
-            .received_message_map
-            .get(listening_swarm.local_peer_id())
-            .unwrap()
-            .keys()
-            .next()
-            .unwrap(),
-        &test_message.id()
+            .message_cache
+            .is_message_processed(&test_message.id())
     );
     assert_eq!(
         listening_swarm
@@ -291,13 +289,11 @@ async fn duplicate_message_within_sensitivity_interval_is_not_spam() {
     assert_eq!(
         listening_swarm
             .behaviour()
-            .received_message_map
-            .get(dialing_swarm.local_peer_id())
-            .unwrap()
-            .keys()
+            .message_cache
+            .messages_from_peer(dialing_swarm.local_peer_id())
             .next()
             .unwrap(),
-        &test_message.id()
+        test_message.id()
     );
 }
 

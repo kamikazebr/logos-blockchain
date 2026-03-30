@@ -6,7 +6,10 @@ use lb_blend::{
         crypto::proofs::PoQVerificationInputsMinusSigningKey,
         encap::{
             encapsulated::EncapsulatedMessage,
-            validated::EncapsulatedMessageWithVerifiedPublicHeader,
+            validated::{
+                EncapsulatedMessageWithVerifiedPublicHeader,
+                EncapsulatedMessageWithVerifiedSignature,
+            },
         },
     },
     proofs::quota::inputs::prove::public::{CoreInputs, LeaderInputs},
@@ -145,5 +148,5 @@ pub trait BlendBackend<NodeId, Rng, ProofsVerifier, RuntimeServiceId> {
     /// Listen to messages received from the blend network.
     fn listen_to_incoming_messages(
         &mut self,
-    ) -> Pin<Box<dyn Stream<Item = EncapsulatedMessageWithVerifiedPublicHeader> + Send>>;
+    ) -> Pin<Box<dyn Stream<Item = EncapsulatedMessageWithVerifiedSignature> + Send>>;
 }

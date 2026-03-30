@@ -17,7 +17,9 @@ use crate::{
     encap::{
         ProofsVerifier,
         decapsulated::{PartDecapsulationOutput, PrivateHeaderDecapsulationOutput},
-        validated::EncapsulatedMessageWithVerifiedPublicHeader,
+        validated::{
+            EncapsulatedMessageWithVerifiedPublicHeader, EncapsulatedMessageWithVerifiedSignature,
+        },
     },
     input::EncapsulationInput,
     message::{
@@ -83,6 +85,12 @@ impl EncapsulatedMessage {
                 self.encapsulated_part,
             ),
         )
+    }
+
+    pub fn verify_public_header_signature(
+        self,
+    ) -> Result<EncapsulatedMessageWithVerifiedSignature, Error> {
+        unimplemented!()
     }
 
     #[must_use]

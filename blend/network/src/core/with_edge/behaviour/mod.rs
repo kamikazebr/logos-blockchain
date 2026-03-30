@@ -11,8 +11,11 @@ use either::Either;
 use lb_blend_message::{
     Error,
     encap::{
-        self, encapsulated::EncapsulatedMessage,
-        validated::EncapsulatedMessageWithVerifiedPublicHeader,
+        self,
+        encapsulated::EncapsulatedMessage,
+        validated::{
+            EncapsulatedMessageWithVerifiedPublicHeader, EncapsulatedMessageWithVerifiedSignature,
+        },
     },
 };
 use lb_blend_proofs::quota::{self, inputs::prove::public::LeaderInputs};
@@ -40,7 +43,7 @@ const LOG_TARGET: &str = "blend::network::core::edge::behaviour";
 pub enum Event {
     /// A message received from one of the edge peers, after its public header
     /// has been verified.
-    Message(EncapsulatedMessageWithVerifiedPublicHeader),
+    Message(EncapsulatedMessageWithVerifiedSignature),
 }
 
 #[derive(Debug)]
@@ -177,36 +180,17 @@ where
             return;
         };
 
-        let Ok(validated_message) =
-            self.validate_encapsulated_message_public_header(deserialized_encapsulated_message)
+        let Ok(message_with_validated_signature) =
+            deserialized_encapsulated_message.verify_public_header_signature()
         else {
             tracing::trace!(target: LOG_TARGET, "Failed to validate public header of received message. Ignoring...");
             return;
         };
 
-        self.events
-            .push_back(ToSwarm::GenerateEvent(Event::Message(validated_message)));
+        self.events.push_back(ToSwarm::GenerateEvent(Event::Message(
+            message_with_validated_signature,
+        )));
         self.try_wake();
-    }
-
-    // Try to validate an encapsulated public header with the current session
-    // verifier, and on failure it tries with with previous one, if the session
-    // transition period is not over yet.
-    fn validate_encapsulated_message_public_header(
-        &self,
-        message: EncapsulatedMessage,
-    ) -> Result<EncapsulatedMessageWithVerifiedPublicHeader, Error> {
-        message
-            .clone()
-            .verify_public_header(&self.current_session_poq_verifier)
-            .or_else(|_| {
-                let Some(previous_session_verifier) = &self.previous_session_poq_verifier else {
-                    return Err(Error::ProofOfQuotaVerificationFailed(
-                        quota::Error::InvalidProof,
-                    ));
-                };
-                message.verify_public_header(previous_session_verifier)
-            })
     }
 
     /// Instruct both current and past session proof verifier (if present) of a

@@ -13,9 +13,75 @@ use crate::{
         encapsulated::{EncapsulatedMessage, EncapsulatedPart},
     },
     input::EncapsulationInput,
-    message::public_header::VerifiedPublicHeader,
+    message::public_header::{PublicHeaderWithVerifiedSignature, VerifiedPublicHeader},
     reward::BlendingToken,
 };
+
+#[derive(Derivative, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
+#[derivative(Debug)]
+pub struct EncapsulatedMessageWithVerifiedSignature {
+    public_header_with_verified_signature: PublicHeaderWithVerifiedSignature,
+    #[derivative(Debug = "ignore")] // too long
+    encapsulated_part: EncapsulatedPart,
+}
+
+impl EncapsulatedMessageWithVerifiedSignature {
+    pub fn new(
+        inputs: &[EncapsulationInput],
+        payload_type: PayloadType,
+        payload_body: PaddedPayloadBody,
+    ) -> Self {
+        // Create the encapsulated part.
+        let (part, signing_key, proof_of_quota) = inputs.iter().enumerate().fold(
+            (
+                // Start with an initialized encapsulated part,
+                // a random signing key, and proof of quota.
+                EncapsulatedPart::initialize(inputs, payload_type, payload_body),
+                UnsecuredEd25519Key::generate_with_blake_rng(),
+                VerifiedProofOfQuota::from_bytes_unchecked(random_sized_bytes()),
+            ),
+            |(part, signing_key, proof_of_quota), (i, input)| {
+                (
+                    part.encapsulate(
+                        input.ephemeral_encryption_key(),
+                        &signing_key,
+                        &proof_of_quota,
+                        *input.proof_of_selection(),
+                        i == 0,
+                    ),
+                    input.ephemeral_signing_key().clone(),
+                    *input.proof_of_quota(),
+                )
+            },
+        );
+
+        // Construct the public header with verified signature.
+        let public_header_with_verified_signature = PublicHeaderWithVerifiedSignature::new(
+            proof_of_quota,
+            signing_key.public_key(),
+            part.sign(&signing_key),
+        );
+
+        Self {
+            public_header_with_verified_signature,
+            encapsulated_part: part,
+        }
+    }
+
+    #[must_use]
+    pub const fn id(&self) -> MessageIdentifier {
+        self.public_header_with_verified_signature.id()
+    }
+}
+
+impl From<EncapsulatedMessageWithVerifiedSignature> for EncapsulatedMessage {
+    fn from(value: EncapsulatedMessageWithVerifiedSignature) -> Self {
+        Self::from_components(
+            value.public_header_with_verified_signature.into(),
+            value.encapsulated_part,
+        )
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 #[cfg_attr(test, derive(Default))]

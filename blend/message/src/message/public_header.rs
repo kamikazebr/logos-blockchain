@@ -29,9 +29,9 @@ impl PublicHeader {
         }
     }
 
-    pub fn verify_signature(&self, body: &[u8]) -> Result<(), Error> {
+    pub fn verify_signature(self, body: &[u8]) -> Result<PublicHeaderWithVerifiedSignature, Error> {
         if self.signing_pubkey.verify(body, &self.signature).is_ok() {
-            Ok(())
+            Ok(PublicHeaderWithVerifiedSignature(self))
         } else {
             Err(Error::SignatureVerificationFailed)
         }
@@ -49,6 +49,10 @@ impl PublicHeader {
 
     pub const fn signing_pubkey(&self) -> &Ed25519PublicKey {
         &self.signing_pubkey
+    }
+
+    pub const fn id(&self) -> MessageIdentifier {
+        *self.signing_pubkey()
     }
 
     pub const fn proof_of_quota(&self) -> &ProofOfQuota {
@@ -76,6 +80,34 @@ impl PublicHeader {
     #[cfg(test)]
     pub const fn proof_of_quota_mut(&mut self) -> &mut ProofOfQuota {
         &mut self.proof_of_quota
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub struct PublicHeaderWithVerifiedSignature(PublicHeader);
+
+impl PublicHeaderWithVerifiedSignature {
+    pub fn try_new(
+        proof_of_quota: ProofOfQuota,
+        signing_pubkey: Ed25519PublicKey,
+        signature: Ed25519Signature,
+    ) -> Result<Self, ()> {
+        let public_header = PublicHeader::new(signing_pubkey, &proof_of_quota.into(), signature);
+        if public_header.verify_signature(&[]).is_ok() {
+            Ok(Self(public_header))
+        } else {
+            Err(())
+        }
+    }
+
+    pub const fn id(&self) -> MessageIdentifier {
+        self.0.id()
+    }
+}
+
+impl From<PublicHeaderWithVerifiedSignature> for PublicHeader {
+    fn from(PublicHeaderWithVerifiedSignature(header): PublicHeaderWithVerifiedSignature) -> Self {
+        header
     }
 }
 

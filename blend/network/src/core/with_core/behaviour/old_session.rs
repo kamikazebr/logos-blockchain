@@ -9,8 +9,11 @@ use either::Either;
 use lb_blend_message::{
     MessageIdentifier,
     encap::{
-        self, encapsulated::EncapsulatedMessage,
-        validated::EncapsulatedMessageWithVerifiedPublicHeader,
+        self,
+        encapsulated::EncapsulatedMessage,
+        validated::{
+            EncapsulatedMessageWithVerifiedPublicHeader, EncapsulatedMessageWithVerifiedSignature,
+        },
     },
 };
 use lb_blend_proofs::quota::inputs::prove::public::LeaderInputs;
@@ -89,6 +92,15 @@ where
             .map_err(|_| Error::InvalidMessage)
     }
 
+    fn verify_encapsulated_message_signature(
+        &self,
+        message: EncapsulatedMessage,
+    ) -> Result<EncapsulatedMessageWithVerifiedSignature, Error> {
+        message
+            .verify_public_header_signature()
+            .map_err(|_| Error::InvalidMessage)
+    }
+
     pub(super) fn start_new_epoch(&mut self, new_pol_inputs: LeaderInputs) {
         self.poq_verifier.start_epoch_transition(new_pol_inputs);
     }
@@ -135,9 +147,9 @@ where
             return Ok(true);
         }
 
-        // Verify the message public header
+        // Verify the message public header's signature
         let validated_message =
-            self.verify_encapsulated_message_public_header(deserialized_encapsulated_message)?;
+            self.verify_encapsulated_message_signature(deserialized_encapsulated_message)?;
 
         // Notify the swarm about the received message, so that it can be further
         // processed by the core protocol module.

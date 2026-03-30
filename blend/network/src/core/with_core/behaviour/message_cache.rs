@@ -10,6 +10,10 @@ pub struct MessageCache {
 }
 
 impl MessageCache {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
     pub fn new_with_peer_capacity(capacity: usize) -> Self {
         Self {
             processed_messages: HashSet::new(),
@@ -42,17 +46,15 @@ impl MessageCache {
             .insert(message_id)
     }
 
-    pub fn is_message_seen_from_peer(
-        &self,
-        message_id: &MessageIdentifier,
-        peer_id: &PeerId,
-    ) -> bool {
-        self.received_messages
-            .get(peer_id)
-            .map_or(false, |message_set| message_set.contains(message_id))
-    }
-
     pub fn remove_peer_info(&mut self, peer_id: &PeerId) {
         self.received_messages.remove(peer_id);
+    }
+
+    #[cfg(test)]
+    pub fn messages_from_peer(&self, peer_id: &PeerId) -> impl Iterator<Item = MessageIdentifier> {
+        self.received_messages
+            .get(peer_id)
+            .into_iter()
+            .flat_map(|set| set.iter().copied())
     }
 }

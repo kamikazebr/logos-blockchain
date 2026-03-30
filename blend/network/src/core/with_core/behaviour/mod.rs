@@ -15,8 +15,11 @@ use futures::Stream;
 use lb_blend_message::{
     MessageIdentifier,
     encap::{
-        self, encapsulated::EncapsulatedMessage,
-        validated::EncapsulatedMessageWithVerifiedPublicHeader,
+        self,
+        encapsulated::EncapsulatedMessage,
+        validated::{
+            EncapsulatedMessageWithVerifiedPublicHeader, EncapsulatedMessageWithVerifiedSignature,
+        },
     },
 };
 use lb_blend_proofs::quota::inputs::prove::public::LeaderInputs;
@@ -186,10 +189,10 @@ struct ConnectionUpgradeFailure {
 
 #[derive(Debug)]
 pub enum Event {
-    /// A message received from one of the core peers, after its public header
+    /// A message received from one of the core peers, after its signature
     /// has been verified.
     Message(
-        Box<EncapsulatedMessageWithVerifiedPublicHeader>,
+        Box<EncapsulatedMessageWithVerifiedSignature>,
         (PeerId, ConnectionId),
     ),
     /// A peer on a given connection has been detected as unhealthy.
@@ -877,6 +880,15 @@ where
             .map_err(|_| Error::InvalidMessage)
     }
 
+    fn validate_encapsulated_message_signature_with_current_session(
+        &self,
+        message: EncapsulatedMessage,
+    ) -> Result<EncapsulatedMessageWithVerifiedSignature, Error> {
+        message
+            .verify_public_header_signature()
+            .map_err(|_| Error::InvalidMessage)
+    }
+
     fn handle_received_serialized_encapsulated_message(
         &mut self,
         serialized_message: &[u8],
@@ -928,20 +940,19 @@ where
             return;
         }
 
-        // Exit early if we've processed this message already and we know it's a valid
-        // one.
+        // Exit early if we've processed this message already and we know it's a valid one: https://www.notion.so/nomos-tech/Blend-Protocol-215261aa09df81ae8857d71066a80084.
         if self.message_cache.is_message_processed(&message_identifier) {
             tracing::trace!(target: LOG_TARGET, "Message with id {message_identifier:?} already processed previously. Dropping it.");
             return;
         }
 
-        // Verify the message public header, or else mark the peer as malicious: https://www.notion.so/nomos-tech/Blend-Protocol-Version-1-215261aa09df81ae8857d71066a80084?source=copy_link#215261aa09df81859cebf5e3d2a5cd8f.
-        let Ok(validated_message) = self
-            .validate_encapsulated_message_public_header_with_current_session(
+        // Verify the message public header's signature, or else mark the peer as malicious: https://www.notion.so/nomos-tech/Blend-Protocol-215261aa09df81ae8857d71066a80084.
+        let Ok(message_with_validated_signature) = self
+            .validate_encapsulated_message_signature_with_current_session(
                 deserialized_encapsulated_message,
             )
         else {
-            tracing::debug!(target: LOG_TARGET, "Neighbor sent us a message with an invalid public header. SKIPPING MARKING IT AS SPAMMY.");
+            tracing::debug!(target: LOG_TARGET, "Neighbor sent us a message with an invalid signature. SKIPPING MARKING IT AS SPAMMY.");
             // TODO: Re-enable once Blend is fixed.
             // self.close_spammy_connection(
             //     (from_peer_id, from_connection_id),
@@ -955,7 +966,7 @@ where
         self.message_cache
             .mark_message_as_processed(message_identifier);
         self.events.push_back(ToSwarm::GenerateEvent(Event::Message(
-            Box::new(validated_message),
+            Box::new(message_with_validated_signature),
             (from_peer_id, from_connection_id),
         )));
         self.try_wake();

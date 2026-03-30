@@ -6,8 +6,12 @@ use core::{
 
 use lb_blend::{
     message::{
-        PayloadType, crypto::key_ext::Ed25519SecretKeyExt as _,
-        encap::validated::EncapsulatedMessageWithVerifiedPublicHeader, input::EncapsulationInput,
+        PayloadType,
+        crypto::key_ext::Ed25519SecretKeyExt as _,
+        encap::validated::{
+            EncapsulatedMessageWithVerifiedPublicHeader, EncapsulatedMessageWithVerifiedSignature,
+        },
+        input::EncapsulationInput,
     },
     proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection},
     scheduling::membership::Membership,
@@ -22,24 +26,24 @@ use libp2p::{
 pub const PROTOCOL_NAME: StreamProtocol = StreamProtocol::new("/blend/swarm/test");
 
 #[derive(Debug)]
-pub struct TestEncapsulatedMessage(EncapsulatedMessageWithVerifiedPublicHeader);
+pub struct TestEncapsulatedMessage(EncapsulatedMessageWithVerifiedSignature);
 
 impl TestEncapsulatedMessage {
     pub fn new(payload: &[u8]) -> Self {
-        Self(EncapsulatedMessageWithVerifiedPublicHeader::new(
+        Self(EncapsulatedMessageWithVerifiedSignature::new(
             &generate_valid_inputs(),
             PayloadType::Data,
             payload.try_into().unwrap(),
         ))
     }
 
-    pub fn into_inner(self) -> EncapsulatedMessageWithVerifiedPublicHeader {
+    pub fn into_inner(self) -> EncapsulatedMessageWithVerifiedSignature {
         self.0
     }
 }
 
 impl Deref for TestEncapsulatedMessage {
-    type Target = EncapsulatedMessageWithVerifiedPublicHeader;
+    type Target = EncapsulatedMessageWithVerifiedSignature;
 
     fn deref(&self) -> &Self::Target {
         &self.0

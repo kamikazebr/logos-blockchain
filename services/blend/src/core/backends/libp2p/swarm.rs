@@ -10,8 +10,11 @@ use std::{
 use futures::StreamExt as _;
 use lb_blend::{
     message::encap::{
-        ProofsVerifier as ProofsVerifierTrait, encapsulated::EncapsulatedMessage,
-        validated::EncapsulatedMessageWithVerifiedPublicHeader,
+        ProofsVerifier as ProofsVerifierTrait,
+        encapsulated::EncapsulatedMessage,
+        validated::{
+            EncapsulatedMessageWithVerifiedPublicHeader, EncapsulatedMessageWithVerifiedSignature,
+        },
     },
     network::core::{
         NetworkBehaviourEvent,
@@ -91,7 +94,7 @@ where
 {
     swarm: Swarm<BlendBehaviour<ProofsVerifier, ObservationWindowProvider>>,
     swarm_messages_receiver: mpsc::Receiver<BlendSwarmMessage>,
-    incoming_message_sender: broadcast::Sender<EncapsulatedMessageWithVerifiedPublicHeader>,
+    incoming_message_sender: broadcast::Sender<EncapsulatedMessageWithVerifiedSignature>,
     public_info: PublicInfo<PeerId>,
     rng: Rng,
     max_dial_attempts_per_connection: NonZeroU64,
@@ -104,7 +107,7 @@ pub struct SwarmParams<'config, Rng> {
     pub current_public_info: PublicInfo<PeerId>,
     pub rng: Rng,
     pub swarm_message_receiver: mpsc::Receiver<BlendSwarmMessage>,
-    pub incoming_message_sender: broadcast::Sender<EncapsulatedMessageWithVerifiedPublicHeader>,
+    pub incoming_message_sender: broadcast::Sender<EncapsulatedMessageWithVerifiedSignature>,
     pub minimum_network_size: NonZeroUsize,
 }
 
@@ -421,7 +424,7 @@ where
 
     fn report_message_to_service(
         &self,
-        msg: EncapsulatedMessageWithVerifiedPublicHeader,
+        msg: EncapsulatedMessageWithVerifiedSignature,
         message_type: metrics::InboundMessageType,
     ) {
         tracing::debug!("Received message from a peer: {msg:?}");
@@ -594,7 +597,7 @@ where
         identity: &libp2p::identity::Keypair,
         behaviour_constructor: BehaviourConstructor,
         swarm_messages_receiver: mpsc::Receiver<BlendSwarmMessage>,
-        incoming_message_sender: broadcast::Sender<EncapsulatedMessageWithVerifiedPublicHeader>,
+        incoming_message_sender: broadcast::Sender<EncapsulatedMessageWithVerifiedSignature>,
         current_public_info: PublicInfo<PeerId>,
         rng: Rng,
         max_dial_attempts_per_connection: NonZeroU64,

@@ -40,7 +40,7 @@ async fn receive_valid_message() {
             _ = edge_swarm.select_next_some() => {}
             core_swarm_event = core_swarm.select_next_some() => {
                 if let SwarmEvent::Behaviour(Event::Message(received_message)) = core_swarm_event {
-                    assert_eq!(received_message, EncapsulatedMessage::from(message.clone()).verify_public_header(&AlwaysTrueVerifier).unwrap());
+                    assert_eq!(received_message, EncapsulatedMessage::from(message.clone()).verify_public_header_signature().unwrap());
                     break;
                 }
             }

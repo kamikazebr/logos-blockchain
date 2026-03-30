@@ -8,7 +8,10 @@ use lb_blend::{
         crypto::key_ext::Ed25519SecretKeyExt as _,
         encap::{
             ProofsVerifier as ProofsVerifierTrait,
-            validated::EncapsulatedMessageWithVerifiedPublicHeader,
+            validated::{
+                EncapsulatedMessageWithVerifiedPublicHeader,
+                EncapsulatedMessageWithVerifiedSignature,
+            },
         },
     },
     network::core::{
@@ -52,7 +55,7 @@ where
 {
     pub swarm: InnerSwarm<ProofsVerifier>,
     pub swarm_message_sender: mpsc::Sender<BlendSwarmMessage>,
-    pub incoming_message_receiver: broadcast::Receiver<EncapsulatedMessageWithVerifiedPublicHeader>,
+    pub incoming_message_receiver: broadcast::Receiver<EncapsulatedMessageWithVerifiedSignature>,
 }
 
 /// Generates `count` nodes with randomly generated identities and empty
