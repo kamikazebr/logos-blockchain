@@ -390,8 +390,8 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
             .iter()
             // Exclude the peer the message was received from.
             .filter(|(peer_id, _)| excluded_peer != Some(**peer_id))
-            // Exclude from the list of candidate peers any peer that is not in a healthy state.
-            .filter(|(_, peer_state)| peer_state.negotiated_state.is_healthy())
+            // Exclude from the list of candidate spammy peers.
+            .filter(|(_, peer_state)| !peer_state.negotiated_state.is_spammy())
             .for_each(|(peer_id, RemotePeerConnectionDetails { connection_id, .. })| {
                 if let Entry::Vacant(message_peer_entry) = self
                     .exchanged_message_identifiers
