@@ -11,7 +11,6 @@ use lb_blend_message::{
     encap,
 };
 use lb_blend_proofs::quota::inputs::prove::public::{CoreInputs, LeaderInputs};
-use lb_blend_scheduling::membership::{Membership, Node};
 use lb_core::{crypto::ZkHash, sdp::SessionNumber};
 use lb_groth16::{Field as _, Fr};
 use lb_key_management_system_keys::keys::{Ed25519PublicKey, UnsecuredEd25519Key};

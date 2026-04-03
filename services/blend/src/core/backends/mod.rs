@@ -2,13 +2,17 @@ use std::{fmt::Debug, pin::Pin};
 
 use futures::Stream;
 use lb_blend::{
-    message::crypto::proofs::PoQVerificationInputsMinusSigningKey,
+    message::{
+        crypto::proofs::PoQVerificationInputsMinusSigningKey,
+        encap::validated::EncapsulatedMessageWithVerifiedPublicHeader,
+    },
     network::core::message::{
         SessionBoundEncapsulatedMessageWithVerifiedHeader,
         SessionBoundEncapsulatedMessageWithVerifiedSignature,
     },
     proofs::quota::inputs::prove::public::{CoreInputs, LeaderInputs},
-    scheduling::{membership::Membership, session::SessionEvent},
+    scheduling::session::SessionEvent,
+    utils::Membership,
 };
 use overwatch::overwatch::handle::OverwatchHandle;
 
@@ -131,7 +135,8 @@ pub trait BlendBackend<NodeId, Rng, RuntimeServiceId> {
     ) -> Self;
     fn shutdown(self);
     /// Publish a message to the blend network.
-    async fn publish(&self, msg: SessionBoundEncapsulatedMessageWithVerifiedHeader);
+    async fn publish(&self, msg: EncapsulatedMessageWithVerifiedPublicHeader);
+    async fn forward(&self, msg: SessionBoundEncapsulatedMessageWithVerifiedHeader);
     /// Rotate session.
     async fn rotate_session(&mut self, new_session_info: SessionInfo<NodeId>);
     /// Complete the session transition.

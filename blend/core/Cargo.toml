@@ -18,6 +18,7 @@ lb-blend-message    = { workspace = true }
 lb-blend-network    = { workspace = true }
 lb-blend-proofs     = { workspace = true }
 lb-blend-scheduling = { workspace = true }
+lb-blend-utils      = { workspace = true }
 
 [features]
 unsafe-test-functions = [
@@ -25,4 +26,5 @@ unsafe-test-functions = [
   "lb-blend-network/unsafe-test-functions",
   "lb-blend-proofs/unsafe-test-functions",
   "lb-blend-scheduling/unsafe-test-functions",
+  "lb-blend-utils/unsafe-test-functions",
 ]

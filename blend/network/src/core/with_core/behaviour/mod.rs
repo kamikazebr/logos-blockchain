@@ -14,7 +14,7 @@ use futures::Stream;
 use lb_blend_message::encap::validated::{
     EncapsulatedMessageWithVerifiedPublicHeader, EncapsulatedMessageWithVerifiedSignature,
 };
-use lb_blend_scheduling::membership::Membership;
+use lb_blend_utils::Membership;
 use libp2p::{
     Multiaddr, PeerId, StreamProtocol,
     core::{Endpoint, transport::PortUse},
@@ -311,9 +311,7 @@ impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
         peer_id: PeerId,
     ) -> Result<(), SendError> {
         let serialized_message =
-            lb_blend_scheduling::serialize_encapsulated_message_with_verified_public_header(
-                message,
-            );
+            lb_blend_message::serialize_encapsulated_message_with_verified_public_header(message);
         self.force_send_serialized_message_to_peer(serialized_message, peer_id)
     }
 
@@ -763,6 +761,13 @@ impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
     /// Before the message is propagated, its public header is validated to
     /// make sure the receiving peer won't mark us as malicious.
     pub fn publish_message_with_validated_header(
+        &mut self,
+        message: EncapsulatedMessageWithVerifiedPublicHeader,
+    ) -> Result<(), SendError> {
+        self.forward_maybe_excluding(&message.into(), None)
+    }
+
+    pub fn publish_session_bound_message_with_validated_header(
         &mut self,
         message: SessionBoundEncapsulatedMessageWithVerifiedHeader,
     ) -> Result<(), SendError> {

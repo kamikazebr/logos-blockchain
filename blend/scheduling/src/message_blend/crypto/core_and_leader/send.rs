@@ -8,18 +8,14 @@ use lb_blend_message::{
 use lb_blend_proofs::quota::inputs::prove::{
     private::ProofOfLeadershipQuotaInputs, public::LeaderInputs,
 };
+use lb_blend_utils::Membership;
 use lb_cryptarchia_engine::Epoch;
 use lb_groth16::fr_to_bytes;
 use lb_key_management_system_keys::keys::X25519PrivateKey;
 
-use crate::{
-    membership::Membership,
-    message_blend::{
-        crypto::{
-            EncapsulatedMessageWithVerifiedPublicHeader, SessionCryptographicProcessorSettings,
-        },
-        provers::{ProofsGeneratorSettings, core_and_leader::CoreAndLeaderProofsGenerator},
-    },
+use crate::message_blend::{
+    crypto::{EncapsulatedMessageWithVerifiedPublicHeader, SessionCryptographicProcessorSettings},
+    provers::{ProofsGeneratorSettings, core_and_leader::CoreAndLeaderProofsGenerator},
 };
 
 /// [`SessionCryptographicProcessor`] is responsible for only wrapping
@@ -217,6 +213,7 @@ mod test {
         private::ProofOfLeadershipQuotaInputs,
         public::{CoreInputs, LeaderInputs},
     };
+    use lb_blend_utils::{Membership, Node};
     use lb_core::crypto::ZkHash;
     use lb_cryptarchia_engine::Epoch;
     use lb_groth16::{Field as _, Fr};
@@ -224,12 +221,9 @@ mod test {
     use multiaddr::{Multiaddr, PeerId};
 
     use super::SessionCryptographicProcessor;
-    use crate::{
-        membership::{Membership, Node},
-        message_blend::crypto::{
-            SessionCryptographicProcessorSettings,
-            test_utils::{MockCorePoQGenerator, TestEpochChangeCoreAndLeaderProofsGenerator},
-        },
+    use crate::message_blend::crypto::{
+        SessionCryptographicProcessorSettings,
+        test_utils::{MockCorePoQGenerator, TestEpochChangeCoreAndLeaderProofsGenerator},
     };
 
     #[test]

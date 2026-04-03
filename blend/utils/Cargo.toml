@@ -1,0 +1,22 @@
+[package]
+categories  = { workspace = true }
+description = { workspace = true }
+edition     = { workspace = true }
+keywords    = { workspace = true }
+license     = { workspace = true }
+name        = "logos-blockchain-blend-utils"
+readme      = { workspace = true }
+repository  = { workspace = true }
+version     = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+lb-key-management-system-keys = { workspace = true }
+multiaddr                     = { default-features = false, version = "0.18" }
+rand                          = { features = ["alloc"], workspace = true }
+serde                         = { workspace = true }
+
+[features]
+unsafe-test-functions = []

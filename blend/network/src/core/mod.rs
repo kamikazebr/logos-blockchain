@@ -5,7 +5,7 @@ pub mod with_edge;
 #[cfg(test)]
 mod tests;
 
-use lb_blend_scheduling::membership::Membership;
+use lb_blend_utils::Membership;
 use libp2p::{PeerId, StreamProtocol};
 
 use self::{

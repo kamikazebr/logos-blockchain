@@ -2,15 +2,16 @@ use core::cmp::Ordering;
 
 use async_trait::async_trait;
 use lb_blend_message::crypto::proofs::PoQVerificationInputsMinusSigningKey;
-use lb_blend_proofs::quota::inputs::prove::{
-    private::ProofOfLeadershipQuotaInputs, public::LeaderInputs,
+use lb_blend_proofs::{
+    BlendLayerProof,
+    quota::inputs::prove::{private::ProofOfLeadershipQuotaInputs, public::LeaderInputs},
 };
 use lb_cryptarchia_engine::Epoch;
 
 use crate::message_blend::{
     CoreProofOfQuotaGenerator,
     provers::{
-        BlendLayerProof, ProofsGeneratorSettings,
+        ProofsGeneratorSettings,
         core::{CoreProofsGenerator as _, RealCoreProofsGenerator},
         leader::{LeaderProofsGenerator as _, RealLeaderProofsGenerator},
     },

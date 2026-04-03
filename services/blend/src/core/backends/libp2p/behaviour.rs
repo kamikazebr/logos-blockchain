@@ -1,4 +1,4 @@
-use lb_blend::scheduling::membership::Membership;
+use lb_blend::utils::Membership;
 use lb_libp2p::NetworkBehaviour;
 use libp2p::{PeerId, allow_block_list::BlockedPeers};
 

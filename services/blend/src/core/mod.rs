@@ -25,6 +25,7 @@ use lb_blend::{
             SessionBlendingTokenCollector,
         },
     },
+    network::core::message::SessionBoundEncapsulatedMessageWithVerifiedSignature,
     proofs::quota::inputs::prove::{
         private::ProofOfLeadershipQuotaInputs,
         public::{CoreInputs, LeaderInputs},
@@ -139,7 +140,7 @@ pub struct BlendService<
     PolInfoProvider,
     RuntimeServiceId,
 > where
-    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId>,
+    Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId>,
     Network: NetworkAdapter<RuntimeServiceId>,
 {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
@@ -182,7 +183,7 @@ impl<
         RuntimeServiceId,
     >
 where
-    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId>,
+    Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId>,
     Network: NetworkAdapter<RuntimeServiceId>,
 {
     type Settings = StartingBlendConfig<Backend::Settings>;
@@ -224,7 +225,7 @@ impl<
         RuntimeServiceId,
     >
 where
-    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Send + Sync,
+    Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId> + Send + Sync,
     NodeId: Clone + Debug + Send + Eq + Hash + Sync + 'static,
     Network: NetworkAdapter<RuntimeServiceId, BroadcastSettings: Eq + Hash + Unpin> + Send + Sync,
     MembershipAdapter: membership::Adapter<NodeId = NodeId, Error: Send + Sync + 'static> + Send,
@@ -553,7 +554,7 @@ async fn initialize<
 )
 where
     NodeId: Clone + Debug + Eq + Hash + Send + 'static,
-    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync,
+    Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId> + Sync,
     NetAdapter: NetworkAdapter<RuntimeServiceId, BroadcastSettings: Eq + Hash + Unpin>,
     ChainService: ChainApi<RuntimeServiceId> + Sync,
     ProofsGenerator: CoreAndLeaderProofsGenerator<KmsAdapter::CorePoQGenerator>,
@@ -819,7 +820,10 @@ async fn run_event_loop<
 >(
     mut inbound_relay: impl Stream<Item = ServiceMessage<NetAdapter::BroadcastSettings>> + Unpin,
     blend_messages: &mut (
-             impl Stream<Item = EncapsulatedMessageWithVerifiedPublicHeader> + Send + Unpin + 'static
+             impl Stream<Item = SessionBoundEncapsulatedMessageWithVerifiedSignature>
+             + Send
+             + Unpin
+             + 'static
          ),
     remaining_clock_stream: &mut (impl Stream<Item = SlotTick> + Send + Sync + Unpin + 'static),
     mut secret_pol_info_stream: impl Stream<Item = PolEpochInfo> + Unpin,
@@ -859,7 +863,7 @@ async fn run_event_loop<
 where
     NodeId: Clone + Eq + Hash + Send + 'static,
     Rng: rand::Rng + Clone + Send + Unpin,
-    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync,
+    Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId> + Sync,
     NetAdapter: NetworkAdapter<
             RuntimeServiceId,
             BroadcastSettings: Serialize
@@ -899,7 +903,7 @@ where
                 }
             }
             Some(incoming_message) = blend_messages.next() => {
-                recovery_checkpoint = handle_incoming_blend_message(incoming_message, &mut message_scheduler, old_session_message_scheduler.as_mut(), &crypto_processor, old_session_crypto_processor.as_ref(),  recovery_checkpoint);
+                recovery_checkpoint = handle_incoming_blend_message(incoming_message, &mut message_scheduler, old_session_message_scheduler.as_mut(), &crypto_processor, old_session_crypto_processor.as_ref(), recovery_checkpoint);
             }
             Some(round_info) = message_scheduler.next() => {
                 recovery_checkpoint = handle_release_round(round_info, &mut crypto_processor, rng, backend, network_adapter,  recovery_checkpoint).await;
@@ -971,7 +975,7 @@ async fn retire<
     CorePoQGenerator,
     RuntimeServiceId,
 >(
-    mut blend_messages: impl Stream<Item = EncapsulatedMessageWithVerifiedPublicHeader>
+    mut blend_messages: impl Stream<Item = SessionBoundEncapsulatedMessageWithVerifiedSignature>
     + Send
     + Unpin
     + 'static,
@@ -1001,7 +1005,7 @@ async fn retire<
 ) where
     NodeId: Clone + Eq + Hash + Send + 'static,
     Rng: rand::Rng + Clone + Send + Unpin,
-    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync,
+    Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId> + Sync,
     NetAdapter: NetworkAdapter<
             RuntimeServiceId,
             BroadcastSettings: Serialize
@@ -1093,7 +1097,7 @@ where
     ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator>,
     ProofsVerifier: ProofsVerifierTrait,
     BroadcastSettings: Debug + Clone + Send + Sync + Unpin,
-    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId>,
+    Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId>,
 {
     match event {
         SessionEvent::NewSession(MaybeEmptyCoreSessionInfo::NonEmpty(CoreSessionInfo {
@@ -1235,7 +1239,7 @@ async fn handle_session_transition_expired<Backend, NodeId, Rng, ProofsVerifier,
     blending_token_collector: OldSessionBlendingTokenCollector,
     sdp_relay: &OutboundRelay<SdpMessage>,
 ) where
-    Backend: BlendBackend<NodeId, Rng, ProofsVerifier, RuntimeServiceId>,
+    Backend: BlendBackend<NodeId, Rng, RuntimeServiceId>,
     NodeId: Eq + Hash + Clone + Send,
     ProofsVerifier: ProofsVerifierTrait,
 {
@@ -1352,10 +1356,8 @@ where
     // Before blending the data message, we try to peel off any outer layers that
     // are addressed to us. In this case, we collect the blending tokens and we
     // blend only the remaining layers.
-    // TODO: Remove this logic once we don't have tests that deploy less than 3
-    // Blend nodes, or when we start using a minimum network size of 3.
     let self_decapsulation_output =
-        cryptographic_processor.decapsulate_message_recursive(wrapped_message.clone());
+        cryptographic_processor.decapsulate_local_message_recursive(wrapped_message.clone());
 
     let Ok(multi_layer_decapsulation_output) = self_decapsulation_output else {
         // The outermost layer of the data message is not for us, hence we treat this as
@@ -1386,11 +1388,12 @@ where
                 NetworkMessage::from_bytes(fully_decapsulated_message.payload_body())
                     .expect("Locally-generated and serialized message should be deserializable.");
             tracing::trace!(target: LOG_TARGET, "Locally generated data message {deserialized_data_message:?} had all the {} layers addressed to this same node. Propagating only the fully decapsulated message.", blending_tokens.len());
-            ProcessedMessage::from(deserialized_data_message)
+            ProcessedMessage::Network(deserialized_data_message)
         }
         DecapsulatedMessageType::Incompleted(remaining_encapsulated_message) => {
+            let validated_message = cryptographic_processor.verify_message_header(*remaining_encapsulated_message).expect("The remaining encapsulated message after self-decapsulation should have a valid header since it was just encapsulated by this node.");
             tracing::trace!(target: LOG_TARGET, "Locally generated data message had the outermost {} layers addressed to this same node. Propagating only the remaining encapsulated layers.", blending_tokens.len());
-            ProcessedMessage::from(*remaining_encapsulated_message)
+            ProcessedMessage::LocallyGenerated(Box::new(validated_message))
         }
     };
     state_updater.collect_current_session_tokens(blending_tokens.into_iter());
@@ -1421,7 +1424,7 @@ fn handle_incoming_blend_message<
     ProofsVerifier,
     CorePoQGenerator,
 >(
-    validated_encapsulated_message: EncapsulatedMessageWithVerifiedPublicHeader,
+    validated_encapsulated_message: SessionBoundEncapsulatedMessageWithVerifiedSignature,
     scheduler: &mut SessionMessageScheduler<
         Rng,
         ProcessedMessage<BroadcastSettings>,
@@ -1451,7 +1454,7 @@ where
     // First, try to decapsulate with the current session crypto processor.
     // If that fails, try with the old session crypto processor, if any.
     match cryptographic_processor
-        .decapsulate_message_recursive(validated_encapsulated_message.clone())
+        .decapsulate_local_message_recursive(validated_encapsulated_message.clone())
     {
         Ok(output) => handle_decapsulated_incoming_message_from_current_session(
             output,
@@ -1465,7 +1468,8 @@ where
                 tracing::trace!(target: LOG_TARGET, "Failed to decapsulate received message with current session crypto processor due to deserialization error. This can happen when the message was intended for another node or when the message is malformed. Ignoring...");
                 return current_recovery_checkpoint;
             };
-            match old_crypto_processor.decapsulate_message_recursive(validated_encapsulated_message)
+            match old_crypto_processor
+                .decapsulate_local_message_recursive(validated_encapsulated_message)
             {
                 Ok(output) => handle_decapsulated_incoming_message_from_old_session(
                     output,
@@ -1515,7 +1519,9 @@ fn handle_incoming_blend_message_from_old_session<
     BroadcastSettings: Serialize + for<'de> Deserialize<'de> + Debug + Eq + Hash + Clone + Send,
     ProofsVerifier: ProofsVerifierTrait,
 {
-    match cryptographic_processor.decapsulate_message_recursive(validated_encapsulated_message) {
+    match cryptographic_processor
+        .decapsulate_local_message_recursive(validated_encapsulated_message)
+    {
         Ok(output) => {
             let (_, blending_tokens) = schedule_decapsulated_incoming_message(output, scheduler);
             for blending_token in blending_tokens {
@@ -1696,7 +1702,7 @@ async fn handle_release_round<
 where
     NodeId: Eq + Hash + 'static,
     Rng: RngCore + Send,
-    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync,
+    Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId> + Sync,
     ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator>,
     ProofsVerifier: ProofsVerifierTrait,
     NetAdapter: NetworkAdapter<RuntimeServiceId, BroadcastSettings: Eq + Hash> + Sync,
@@ -1774,7 +1780,7 @@ async fn handle_release_round_for_old_session<
 ) where
     NodeId: Eq + Hash + 'static,
     Rng: RngCore + Send,
-    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync,
+    Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId> + Sync,
     NetAdapter: NetworkAdapter<RuntimeServiceId, BroadcastSettings: Eq + Hash> + Sync,
 {
     let mut futures = build_futures_to_release_processed_messages(
@@ -1811,7 +1817,7 @@ fn build_futures_to_release_processed_messages<
 ) -> Vec<BoxFuture<'fut, ()>>
 where
     NodeId: Eq + Hash + 'static,
-    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync,
+    Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId> + Sync,
     NetAdapter: NetworkAdapter<RuntimeServiceId, BroadcastSettings: Eq + Hash> + Sync,
 {
     processed_messages_to_release
@@ -1829,8 +1835,11 @@ where
                         broadcast_settings,
                         message,
                     }) => network_adapter.broadcast(message, broadcast_settings).boxed(),
-                    ProcessedMessage::Encapsulated(encapsulated_message) => {
+                    ProcessedMessage::LocallyGenerated(encapsulated_message) => {
                         backend.publish(*encapsulated_message).boxed()
+                    }
+                    ProcessedMessage::ReceivedAndProcessed(received_and_processed_message) => {
+                        backend.forward(*received_and_processed_message).boxed()
                     }
                 }
             },
@@ -1870,8 +1879,8 @@ where
         .encapsulate_cover_payload(&random_sized_bytes::<{ size_of::<u32>() }>())
         .await
         .expect("Should not fail to generate new cover message");
-    let self_decapsulation_output =
-        cryptographic_processor.decapsulate_message_recursive(encapsulated_cover_message.clone());
+    let self_decapsulation_output = cryptographic_processor
+        .decapsulate_local_message_recursive(encapsulated_cover_message.clone());
     let Ok(multi_layer_decapsulation_output) = self_decapsulation_output else {
         // First layer not addressed to ourselves. Publish as regular cover message,
         // hence we consume a core quota.
@@ -1932,7 +1941,7 @@ where
     ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator>,
     ProofsVerifier: ProofsVerifierTrait,
     ChainService: ChainApi<RuntimeServiceId> + Sync,
-    Backend: BlendBackend<NodeId, Rng, ProofsVerifier, RuntimeServiceId>,
+    Backend: BlendBackend<NodeId, Rng, RuntimeServiceId>,
     RuntimeServiceId: Sync,
 {
     let Some(epoch_event) = epoch_handler.tick(slot_tick).await else {
@@ -2048,7 +2057,7 @@ async fn handle_new_secret_epoch_info<
     current_epoch: Epoch,
 ) -> Option<LeaderInputs>
 where
-    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync,
+    Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId> + Sync,
     ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator>,
     ProofsVerifier: ProofsVerifierTrait,
 {

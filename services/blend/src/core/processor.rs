@@ -16,16 +16,18 @@ use lb_blend::{
         },
         reward::BlendingToken,
     },
-    scheduling::{
-        membership::Membership,
-        message_blend::{
-            crypto::{
-                SessionCryptographicProcessorSettings,
-                core_and_leader::send_and_receive::SessionCryptographicProcessor,
-            },
-            provers::core_and_leader::CoreAndLeaderProofsGenerator,
-        },
+    network::core::message::{
+        SessionBoundDecapsulationOutput, SessionBoundEncapsulatedMessage,
+        SessionBoundEncapsulatedMessageWithVerifiedHeader,
     },
+    scheduling::message_blend::{
+        crypto::{
+            SessionCryptographicProcessorSettings,
+            core_and_leader::send_and_receive::SessionCryptographicProcessor,
+        },
+        provers::core_and_leader::CoreAndLeaderProofsGenerator,
+    },
+    utils::Membership,
 };
 use lb_chain_service::Epoch;
 
@@ -123,11 +125,53 @@ impl From<DecapsulationOutput> for DecapsulatedMessageType {
     }
 }
 
+/// The output of a multi-layer decapsulation operation.
+#[derive(Debug)]
+pub struct SessionBoundMultiLayerDecapsulationOutput {
+    /// The blending token collected on the way, one per decapsulated layer.
+    blending_tokens: Vec<BlendingToken>,
+    /// The final message type.
+    decapsulated_message: SessionBoundDecapsulatedMessageType,
+}
+
+/// The final message type of a multi-layer decapsulation operation.
+#[derive(Debug)]
+pub enum SessionBoundDecapsulatedMessageType {
+    /// The remainder of the message still needs to be decapsulated by some
+    /// other node.
+    Incompleted(Box<SessionBoundEncapsulatedMessage>),
+    /// The message was fully decapsulated, as all the remaining encapsulations
+    /// were addressed to this node.
+    Completed(DecapsulatedMessage),
+}
+
+impl From<SessionBoundDecapsulationOutput> for SessionBoundDecapsulatedMessageType {
+    fn from(value: SessionBoundDecapsulationOutput) -> Self {
+        match value {
+            SessionBoundDecapsulationOutput::Completed {
+                fully_decapsulated_message,
+                ..
+            } => Self::Completed(fully_decapsulated_message),
+            SessionBoundDecapsulationOutput::Incompleted {
+                remaining_encapsulated_message,
+                ..
+            } => Self::Incompleted(remaining_encapsulated_message),
+        }
+    }
+}
+
 impl<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>
     CoreCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>
 where
     ProofsVerifier: ProofsVerifierTrait,
 {
+    pub fn verify_message_header(
+        &self,
+        message: EncapsulatedMessage,
+    ) -> Result<EncapsulatedMessageWithVerifiedPublicHeader, InnerError> {
+        message.verify_public_header(self.0.verifier())
+    }
+
     /// Semantically similar to the underlying
     /// [`SessionCryptographicProcessor::decapsulate_message`], but it does not
     /// stop after decapsulating the outermost layer. It stops only when a layer
@@ -142,7 +186,7 @@ where
     /// found or when there is no more layers to decapsulate. In either case, it
     /// returns the last processed layer, along with the list of blending tokens
     /// collected along the way.
-    pub fn decapsulate_message_recursive(
+    pub fn decapsulate_local_message_recursive(
         &self,
         message: EncapsulatedMessageWithVerifiedPublicHeader,
     ) -> Result<MultiLayerDecapsulationOutput, InnerError> {
@@ -151,7 +195,7 @@ where
             message.public_header().signing_key(),
             message.public_header().proof_of_quota().key_nullifier()
         );
-        let mut decapsulation_output = self.0.decapsulate_message(message)?;
+        let mut decapsulation_output = self.0.decapsulate_local_message(message)?;
 
         let mut collected_blending_tokens = Vec::new();
 
@@ -185,7 +229,7 @@ where
                     };
                     let Ok(nested_layer_decapsulation_output) = self
                         .0
-                        .decapsulate_message(message_with_validated_public_header)
+                        .decapsulate_local_message(message_with_validated_public_header)
                     else {
                         break;
                     };
@@ -195,6 +239,64 @@ where
         }
 
         Ok(MultiLayerDecapsulationOutput {
+            blending_tokens: collected_blending_tokens,
+            decapsulated_message: decapsulation_output.into(),
+        })
+    }
+
+    pub fn decapsulate_received_message_recursive(
+        &self,
+        message: SessionBoundEncapsulatedMessageWithVerifiedHeader,
+    ) -> Result<SessionBoundMultiLayerDecapsulationOutput, InnerError> {
+        tracing::trace!(
+            "Attempt at batch-decapsulating message with PoQ nullifier and key: ({:?}, {:?})",
+            message.public_header().signing_key(),
+            message.public_header().proof_of_quota().key_nullifier()
+        );
+        let mut decapsulation_output = self.0.decapsulated_received_message(message)?;
+
+        let mut collected_blending_tokens = Vec::new();
+
+        loop {
+            match &decapsulation_output {
+                // We reached the end. Collect token and stop.
+                SessionBoundDecapsulationOutput::Completed { blending_token, .. } => {
+                    collected_blending_tokens.push(blending_token.clone());
+                    break;
+                }
+                // One or more layers to decapsulate. Collect token from current layer and attempt
+                // one more decapsulation.
+                SessionBoundDecapsulationOutput::Incompleted {
+                    remaining_encapsulated_message,
+                    blending_token,
+                } => {
+                    collected_blending_tokens.push(blending_token.clone());
+                    // If we find a message with an invalid public header after a successful
+                    // decapsulation, we still bubble it up for the scheduler to
+                    // schedule it. At the time of release, the message will be
+                    // ignored since its public header cannot be verified. This is not the most
+                    // efficient way, but it's the less invasive way since by decapsulation we
+                    // currently mean decrypting an encrypted Blend header. No additional checks are
+                    // performed on the nested public header. The spec simply ignores the message,
+                    // and so we do.
+                    let Ok(message_with_validated_public_header) = remaining_encapsulated_message
+                        .clone()
+                        .verify_public_header(self.verifier())
+                    else {
+                        break;
+                    };
+                    let Ok(nested_layer_decapsulation_output) = self
+                        .0
+                        .decapsulated_received_message(message_with_validated_public_header)
+                    else {
+                        break;
+                    };
+                    decapsulation_output = nested_layer_decapsulation_output;
+                }
+            }
+        }
+
+        Ok(SessionBoundMultiLayerDecapsulationOutput {
             blending_tokens: collected_blending_tokens,
             decapsulated_message: decapsulation_output.into(),
         })
@@ -361,7 +463,7 @@ mod tests {
             Epoch::new(0),
         );
         assert!(matches!(
-            processor.decapsulate_message_recursive(mock_message),
+            processor.decapsulate_local_message_recursive(mock_message),
             Err(InnerError::ProofOfSelectionVerificationFailed(
                 selection::Error::Verification
             ))
@@ -393,7 +495,7 @@ mod tests {
         );
         StaticFetchVerifier::set_remaining_valid_poq_proofs(1);
         let decapsulation_output = processor
-            .decapsulate_message_recursive(mock_message)
+            .decapsulate_local_message_recursive(mock_message)
             .unwrap();
         let (blending_tokens, remaining_message_type) = decapsulation_output.into_components();
         assert_eq!(blending_tokens.len(), 1);
@@ -428,7 +530,7 @@ mod tests {
         );
         StaticFetchVerifier::set_remaining_valid_poq_proofs(2);
         let decapsulation_output = processor
-            .decapsulate_message_recursive(mock_message)
+            .decapsulate_local_message_recursive(mock_message)
             .unwrap();
         let (blending_tokens, remaining_message_type) = decapsulation_output.into_components();
         assert_eq!(blending_tokens.len(), 2);
@@ -463,7 +565,7 @@ mod tests {
         );
         StaticFetchVerifier::set_remaining_valid_poq_proofs(3);
         let decapsulation_output = processor
-            .decapsulate_message_recursive(mock_message)
+            .decapsulate_local_message_recursive(mock_message)
             .unwrap();
         let (blending_tokens, remaining_message_type) = decapsulation_output.into_components();
         assert_eq!(blending_tokens.len(), 3);

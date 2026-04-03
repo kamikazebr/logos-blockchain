@@ -1,6 +1,9 @@
 use core::fmt::{self, Debug, Formatter};
 
-use lb_blend::message::encap::encapsulated::EncapsulatedMessage;
+use lb_blend::{
+    message::encap::validated::EncapsulatedMessageWithVerifiedPublicHeader,
+    network::core::message::SessionBoundEncapsulatedMessageWithVerifiedHeader,
+};
 use serde::{Deserialize, Serialize};
 
 /// A message that is handled by [`BlendService`].
@@ -37,10 +40,8 @@ where
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum ProcessedMessage<BroadcastSettings> {
     Network(NetworkMessage<BroadcastSettings>),
-    // We cannot use `EncapsulatedMessageWithVerifiedPublicHeader` because we don't know if this
-    // message belongs to the current or the old session, so we need to let the libp2p swarm find
-    // out.
-    Encapsulated(Box<EncapsulatedMessage>),
+    LocallyGenerated(Box<EncapsulatedMessageWithVerifiedPublicHeader>),
+    ReceivedAndProcessed(Box<SessionBoundEncapsulatedMessageWithVerifiedHeader>),
 }
 
 impl<BroadcastSettings> From<NetworkMessage<BroadcastSettings>>
@@ -51,8 +52,10 @@ impl<BroadcastSettings> From<NetworkMessage<BroadcastSettings>>
     }
 }
 
-impl<BroadcastSettings> From<EncapsulatedMessage> for ProcessedMessage<BroadcastSettings> {
-    fn from(value: EncapsulatedMessage) -> Self {
-        Self::Encapsulated(Box::new(value))
+impl<BroadcastSettings> From<EncapsulatedMessageWithVerifiedPublicHeader>
+    for ProcessedMessage<BroadcastSettings>
+{
+    fn from(value: EncapsulatedMessageWithVerifiedPublicHeader) -> Self {
+        Self::LocallyGenerated(Box::new(value))
     }
 }

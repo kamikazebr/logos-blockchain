@@ -4218,6 +4218,7 @@ dependencies = [
  "logos-blockchain-blend-network",
  "logos-blockchain-blend-proofs",
  "logos-blockchain-blend-scheduling",
+ "logos-blockchain-blend-utils",
 ]
 
 [[package]]
@@ -4271,7 +4272,7 @@ dependencies = [
  "libp2p-swarm-test",
  "logos-blockchain-blend-message",
  "logos-blockchain-blend-proofs",
- "logos-blockchain-blend-scheduling",
+ "logos-blockchain-blend-utils",
  "logos-blockchain-core",
  "logos-blockchain-groth16",
  "logos-blockchain-key-management-system-keys",
@@ -4314,7 +4315,9 @@ dependencies = [
  "hex",
  "libp2p",
  "logos-blockchain-blend-message",
+ "logos-blockchain-blend-network",
  "logos-blockchain-blend-proofs",
+ "logos-blockchain-blend-utils",
  "logos-blockchain-core",
  "logos-blockchain-cryptarchia-engine",
  "logos-blockchain-groth16",
@@ -4367,6 +4370,16 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tracing",
+]
+
+[[package]]
+name = "logos-blockchain-blend-utils"
+version = "0.2.1"
+dependencies = [
+ "logos-blockchain-key-management-system-keys",
+ "multiaddr",
+ "rand 0.8.5",
+ "serde",
 ]
 
 [[package]]

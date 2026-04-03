@@ -2,9 +2,9 @@ use core::{convert::Infallible, task::Waker};
 use std::collections::VecDeque;
 
 use either::Either;
-use lb_blend_message::encap::validated::EncapsulatedMessageWithVerifiedSignature;
-use lb_blend_scheduling::{
-    deserialize_encapsulated_message, serialize_encapsulated_message_with_verified_signature,
+use lb_blend_message::{
+    deserialize_encapsulated_message, encap::validated::EncapsulatedMessageWithVerifiedSignature,
+    serialize_encapsulated_message_with_verified_signature,
 };
 use libp2p::{
     PeerId,

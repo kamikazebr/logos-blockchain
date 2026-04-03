@@ -5,9 +5,12 @@ use futures::{
     Stream, StreamExt as _,
     future::{AbortHandle, Abortable},
 };
-use lb_blend::network::core::message::{
-    SessionBoundEncapsulatedMessageWithVerifiedHeader,
-    SessionBoundEncapsulatedMessageWithVerifiedSignature,
+use lb_blend::{
+    message::encap::validated::EncapsulatedMessageWithVerifiedPublicHeader,
+    network::core::message::{
+        SessionBoundEncapsulatedMessageWithVerifiedHeader,
+        SessionBoundEncapsulatedMessageWithVerifiedSignature,
+    },
 };
 use libp2p::PeerId;
 use overwatch::overwatch::handle::OverwatchHandle;
@@ -91,13 +94,23 @@ where
         drop(self);
     }
 
-    async fn publish(&self, msg: SessionBoundEncapsulatedMessageWithVerifiedHeader) {
+    async fn publish(&self, msg: EncapsulatedMessageWithVerifiedPublicHeader) {
         if let Err(e) = self
             .swarm_message_sender
             .send(BlendSwarmMessage::Publish(Box::new(msg)))
             .await
         {
-            tracing::error!(target: LOG_TARGET, "Failed to send message to BlendSwarm: {e}");
+            tracing::error!(target: LOG_TARGET, "Failed to send publish message to BlendSwarm: {e}");
+        }
+    }
+
+    async fn forward(&self, msg: SessionBoundEncapsulatedMessageWithVerifiedHeader) {
+        if let Err(e) = self
+            .swarm_message_sender
+            .send(BlendSwarmMessage::Forward(Box::new(msg)))
+            .await
+        {
+            tracing::error!(target: LOG_TARGET, "Failed to send forward message to BlendSwarm: {e}");
         }
     }
 

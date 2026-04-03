@@ -8,18 +8,19 @@ use lb_blend_message::{
         validated::RequiredProofOfSelectionVerificationInputs,
     },
 };
+use lb_blend_network::core::message::{
+    SessionBoundDecapsulationOutput, SessionBoundEncapsulatedMessageWithVerifiedHeader,
+};
 use lb_blend_proofs::quota::inputs::prove::public::LeaderInputs;
+use lb_blend_utils::Membership;
 use lb_cryptarchia_engine::Epoch;
 
-use crate::{
-    membership::Membership,
-    message_blend::{
-        crypto::{
-            EncapsulatedMessageWithVerifiedPublicHeader, SessionCryptographicProcessorSettings,
-            core_and_leader::send::SessionCryptographicProcessor as SenderSessionCryptographicProcessor,
-        },
-        provers::core_and_leader::CoreAndLeaderProofsGenerator,
+use crate::message_blend::{
+    crypto::{
+        EncapsulatedMessageWithVerifiedPublicHeader, SessionCryptographicProcessorSettings,
+        core_and_leader::send::SessionCryptographicProcessor as SenderSessionCryptographicProcessor,
     },
+    provers::core_and_leader::CoreAndLeaderProofsGenerator,
 };
 
 /// [`SessionCryptographicProcessor`] is responsible for wrapping both cover and
@@ -82,10 +83,27 @@ impl<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>
 where
     ProofsVerifier: ProofsVerifierTrait,
 {
-    pub fn decapsulate_message(
+    pub fn decapsulate_local_message(
         &self,
         message: EncapsulatedMessageWithVerifiedPublicHeader,
     ) -> Result<DecapsulationOutput, Error> {
+        let Some(local_node_index) = self.sender_processor.membership().local_index() else {
+            return Err(Error::NotCoreNodeReceiver);
+        };
+        message.decapsulate(
+            self.sender_processor.non_ephemeral_encryption_key(),
+            &RequiredProofOfSelectionVerificationInputs {
+                expected_node_index: local_node_index as u64,
+                total_membership_size: self.sender_processor.membership().size() as u64,
+            },
+            &self.proofs_verifier,
+        )
+    }
+
+    pub fn decapsulated_received_message(
+        &self,
+        message: SessionBoundEncapsulatedMessageWithVerifiedHeader,
+    ) -> Result<SessionBoundDecapsulationOutput, Error> {
         let Some(local_node_index) = self.sender_processor.membership().local_index() else {
             return Err(Error::NotCoreNodeReceiver);
         };
@@ -130,6 +148,7 @@ mod test {
 
     use lb_blend_message::crypto::proofs::PoQVerificationInputsMinusSigningKey;
     use lb_blend_proofs::quota::inputs::prove::public::{CoreInputs, LeaderInputs};
+    use lb_blend_utils::{Membership, Node};
     use lb_core::crypto::ZkHash;
     use lb_cryptarchia_engine::Epoch;
     use lb_groth16::{Field as _, Fr};
@@ -137,14 +156,11 @@ mod test {
     use multiaddr::{Multiaddr, PeerId};
 
     use super::SessionCryptographicProcessor;
-    use crate::{
-        membership::{Membership, Node},
-        message_blend::crypto::{
-            SessionCryptographicProcessorSettings,
-            test_utils::{
-                MockCorePoQGenerator, TestEpochChangeCoreAndLeaderProofsGenerator,
-                TestEpochChangeProofsVerifier,
-            },
+    use crate::message_blend::crypto::{
+        SessionCryptographicProcessorSettings,
+        test_utils::{
+            MockCorePoQGenerator, TestEpochChangeCoreAndLeaderProofsGenerator,
+            TestEpochChangeProofsVerifier,
         },
     };
 

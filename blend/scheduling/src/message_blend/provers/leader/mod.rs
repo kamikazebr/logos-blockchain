@@ -6,6 +6,7 @@ use lb_blend_message::crypto::{
     key_ext::Ed25519SecretKeyExt as _, proofs::PoQVerificationInputsMinusSigningKey,
 };
 use lb_blend_proofs::{
+    BlendLayerProof,
     quota::{
         VerifiedProofOfQuota,
         inputs::prove::{
@@ -21,7 +22,7 @@ use lb_key_management_system_keys::keys::UnsecuredEd25519Key;
 use lb_utils::tokio::stream::Buffered;
 use tokio::{task::spawn_blocking, time::Instant};
 
-use crate::message_blend::provers::{BlendLayerProof, ProofsGeneratorSettings};
+use crate::message_blend::provers::ProofsGeneratorSettings;
 
 #[cfg(test)]
 mod tests;

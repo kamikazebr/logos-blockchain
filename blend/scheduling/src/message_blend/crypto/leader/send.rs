@@ -3,22 +3,17 @@ use std::num::NonZeroU64;
 
 use lb_blend_message::{
     Error, PaddedPayloadBody, PayloadType, crypto::proofs::PoQVerificationInputsMinusSigningKey,
-    input::EncapsulationInput,
+    input::EncapsulationInput, serialize_encapsulated_message_with_verified_public_header,
 };
 use lb_blend_proofs::quota::inputs::prove::{
     private::ProofOfLeadershipQuotaInputs, public::LeaderInputs,
 };
+use lb_blend_utils::Membership;
 use lb_cryptarchia_engine::Epoch;
 
-use crate::{
-    membership::Membership,
-    message_blend::{
-        crypto::{
-            EncapsulatedMessageWithVerifiedPublicHeader,
-            serialize_encapsulated_message_with_verified_public_header,
-        },
-        provers::{ProofsGeneratorSettings, leader::LeaderProofsGenerator},
-    },
+use crate::message_blend::{
+    crypto::EncapsulatedMessageWithVerifiedPublicHeader,
+    provers::{ProofsGeneratorSettings, leader::LeaderProofsGenerator},
 };
 
 /// [`SessionCryptographicProcessor`] is responsible for only wrapping data
@@ -152,6 +147,7 @@ mod test {
         private::ProofOfLeadershipQuotaInputs,
         public::{CoreInputs, LeaderInputs},
     };
+    use lb_blend_utils::{Membership, Node};
     use lb_core::crypto::ZkHash;
     use lb_cryptarchia_engine::Epoch;
     use lb_groth16::{Field as _, Fr};
@@ -159,10 +155,7 @@ mod test {
     use libp2p::{Multiaddr, PeerId};
 
     use super::SessionCryptographicProcessor;
-    use crate::{
-        membership::{Membership, Node},
-        message_blend::crypto::test_utils::TestEpochChangeLeaderProofsGenerator,
-    };
+    use crate::message_blend::crypto::test_utils::TestEpochChangeLeaderProofsGenerator;
 
     #[test]
     fn epoch_rotation() {

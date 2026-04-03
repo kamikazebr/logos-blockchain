@@ -1,5 +1,8 @@
 use lb_blend_crypto::{ZkHash, ZkHasher};
+use lb_key_management_system_keys::keys::UnsecuredEd25519Key;
 pub use lb_poq::CorePathAndSelectors;
+
+use crate::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection};
 
 pub mod quota;
 pub mod selection;
@@ -37,4 +40,14 @@ impl ZkCompressExt for &[ZkHash; 2] {
         hasher.compress(self);
         hasher.finalize()
     }
+}
+
+/// A single proof to be attached to one layer of a Blend message.
+pub struct BlendLayerProof {
+    /// `PoQ`
+    pub proof_of_quota: VerifiedProofOfQuota,
+    /// `PoSel`
+    pub proof_of_selection: VerifiedProofOfSelection,
+    /// Ephemeral key used to sign the message layer's payload.
+    pub ephemeral_signing_key: UnsecuredEd25519Key,
 }

@@ -13,10 +13,10 @@ use lb_blend_message::{
     input::EncapsulationInput,
 };
 use lb_blend_proofs::{
+    BlendLayerProof,
     quota::{ProofOfQuota, VerifiedProofOfQuota, inputs::prove::public::LeaderInputs},
     selection::{ProofOfSelection, VerifiedProofOfSelection, inputs::VerifyInputs},
 };
-use lb_blend_scheduling::message_blend::provers::BlendLayerProof;
 use lb_core::sdp::SessionNumber;
 use lb_key_management_system_keys::keys::{
     Ed25519PublicKey, Ed25519Signature, UnsecuredEd25519Key,

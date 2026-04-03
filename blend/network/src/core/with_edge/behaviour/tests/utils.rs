@@ -3,7 +3,6 @@ use std::collections::{HashSet, VecDeque};
 
 use async_trait::async_trait;
 use lb_blend_message::encap;
-use lb_blend_scheduling::membership::{Membership, Node};
 use lb_key_management_system_keys::keys::{ED25519_PUBLIC_KEY_SIZE, Ed25519PublicKey};
 use libp2p::{Multiaddr, PeerId, Stream, Swarm};
 use libp2p_stream::Behaviour as StreamBehaviour;

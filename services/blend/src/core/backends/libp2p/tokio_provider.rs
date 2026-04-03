@@ -2,9 +2,7 @@ use core::{num::NonZeroU64, ops::RangeInclusive, time::Duration};
 use std::hash::Hash;
 
 use futures::StreamExt as _;
-use lb_blend::{
-    network::core::with_core::behaviour::IntervalStreamProvider, scheduling::membership::Membership,
-};
+use lb_blend::{network::core::with_core::behaviour::IntervalStreamProvider, utils::Membership};
 use lb_utils::math::NonNegativeF64;
 use tokio::time::MissedTickBehavior;
 use tokio_stream::wrappers::IntervalStream;

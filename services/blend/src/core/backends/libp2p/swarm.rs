@@ -9,7 +9,7 @@ use std::{
 
 use futures::StreamExt as _;
 use lb_blend::{
-    self,
+    message::encap::validated::EncapsulatedMessageWithVerifiedPublicHeader,
     network::core::{
         NetworkBehaviourEvent,
         message::{
@@ -25,7 +25,7 @@ use lb_blend::{
         },
         with_edge::behaviour::Event as CoreToEdgeEvent,
     },
-    scheduling::membership::Membership,
+    utils::Membership,
 };
 use lb_libp2p::{DialOpts, SwarmEvent};
 use libp2p::{Multiaddr, PeerId, Swarm, SwarmBuilder, swarm::dial_opts::PeerCondition};
@@ -48,7 +48,8 @@ use crate::{
 
 #[derive(Debug)]
 pub enum BlendSwarmMessage {
-    Publish(Box<SessionBoundEncapsulatedMessageWithVerifiedHeader>),
+    Publish(Box<EncapsulatedMessageWithVerifiedPublicHeader>),
+    Forward(Box<SessionBoundEncapsulatedMessageWithVerifiedHeader>),
     StartNewSession(SessionInfo<PeerId>),
     CompleteSessionTransition,
 }
@@ -464,7 +465,22 @@ where
         }
     }
 
-    fn handle_publish_swarm_message(
+    fn handle_publish_swarm_message(&mut self, msg: EncapsulatedMessageWithVerifiedPublicHeader) {
+        if let Err(e) = self
+            .swarm
+            .behaviour_mut()
+            .blend
+            .with_core_mut()
+            .publish_message_with_validated_header(msg)
+        {
+            tracing::error!(target: LOG_TARGET, "Failed to publish message to blend network: {e:?}");
+            metrics::outbound_publish_err();
+        } else {
+            metrics::outbound_publish_ok();
+        }
+    }
+
+    fn handle_forward_swarm_message(
         &mut self,
         msg: SessionBoundEncapsulatedMessageWithVerifiedHeader,
     ) {
@@ -473,7 +489,7 @@ where
             .behaviour_mut()
             .blend
             .with_core_mut()
-            .publish_message_with_validated_header(msg)
+            .publish_session_bound_message_with_validated_header(msg)
         {
             tracing::error!(target: LOG_TARGET, "Failed to publish message to blend network: {e:?}");
             metrics::outbound_publish_err();
@@ -546,6 +562,9 @@ where
         match msg {
             BlendSwarmMessage::Publish(msg) => {
                 self.handle_publish_swarm_message(*msg);
+            }
+            BlendSwarmMessage::Forward(msg) => {
+                self.handle_forward_swarm_message(*msg);
             }
             BlendSwarmMessage::StartNewSession(new_session_info) => {
                 self.public_info.session = new_session_info;
