@@ -4276,6 +4276,7 @@ dependencies = [
  "logos-blockchain-groth16",
  "logos-blockchain-key-management-system-keys",
  "logos-blockchain-libp2p",
+ "serde",
  "test-log",
  "tokio",
  "tokio-stream",

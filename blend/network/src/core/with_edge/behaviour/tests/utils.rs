@@ -62,7 +62,7 @@ impl BehaviourBuilder {
         Behaviour {
             events: VecDeque::new(),
             waker: None,
-            current_membership,
+            current_session_info: current_membership,
             connection_timeout: self.timeout.unwrap_or(Duration::from_secs(1)),
             upgraded_edge_peers: HashSet::new(),
             max_incoming_connections: self.max_incoming_connections.unwrap_or(100),

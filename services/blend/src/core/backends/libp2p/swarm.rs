@@ -385,7 +385,7 @@ where
             .behaviour_mut()
             .blend
             .with_core_mut()
-            .validate_and_publish_message(msg)
+            .publish_message_with_validated_header(msg)
         {
             tracing::error!(target: LOG_TARGET, "Failed to publish message to blend network: {e:?}");
             metrics::outbound_publish_err();
@@ -404,7 +404,7 @@ where
             .behaviour_mut()
             .blend
             .with_core_mut()
-            .validate_and_forward_message(msg, except)
+            .forward_message_with_validated_signature(msg, except)
         {
             // If we have a single connection, then we will always hit the `NoPeers` error.
             // In this case it's ok not to log such error, since this function is only
@@ -475,7 +475,7 @@ where
             .behaviour_mut()
             .blend
             .with_core_mut()
-            .validate_and_publish_message(msg)
+            .publish_message_with_validated_header(msg)
         {
             tracing::error!(target: LOG_TARGET, "Failed to publish message to blend network: {e:?}");
             metrics::outbound_publish_err();

@@ -156,7 +156,7 @@ impl BehaviourBuilder {
             observation_window_clock_provider: self
                 .provider
                 .unwrap_or_else(|| IntervalProviderBuilder::default().build()),
-            current_membership: self
+            current_session_info: self
                 .membership
                 .unwrap_or_else(|| Membership::new_without_local(&[])),
             peering_degree: self.peering_degree.unwrap_or(1..=1),

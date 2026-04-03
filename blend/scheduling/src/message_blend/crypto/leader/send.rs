@@ -136,7 +136,7 @@ where
         payload: &[u8],
     ) -> Result<Vec<u8>, Error> {
         Ok(serialize_encapsulated_message(
-            &self.encapsulate_data_payload(payload).await?,
+            &self.encapsulate_data_payload(payload).await?.into(),
         ))
     }
 }

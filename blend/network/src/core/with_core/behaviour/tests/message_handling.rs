@@ -44,7 +44,7 @@ async fn message_sending_and_reception() {
     let test_message_id = test_message.id();
     dialing_swarm
         .behaviour_mut()
-        .validate_and_publish_message(test_message.clone().into())
+        .publish_message_with_validated_header(test_message.clone().into())
         .unwrap();
 
     loop {
@@ -90,7 +90,7 @@ async fn message_sending_and_reception() {
     assert_eq!(
         dialing_swarm
             .behaviour_mut()
-            .validate_and_publish_message(test_message.clone().into()),
+            .publish_message_with_validated_header(test_message.clone().into()),
         Err(SendError::DuplicateMessage)
     );
 }
@@ -104,8 +104,8 @@ async fn invalid_public_header_message_publish() {
     assert_eq!(
         dialing_swarm
             .behaviour_mut()
-            .validate_and_publish_message(invalid_signature_message.into_inner().into()),
-        Err(SendError::InvalidPublicHeader)
+            .publish_message_with_validated_header(invalid_signature_message.into_inner().into()),
+        Err(SendError::InvalidHeaderSignature)
     );
 }
 
@@ -181,7 +181,7 @@ async fn duplicate_message_received_from_same_peer() {
     let test_message = TestEncapsulatedMessage::new(b"msg");
     dialing_swarm
         .behaviour_mut()
-        .validate_and_publish_message(test_message.clone().into())
+        .publish_message_with_validated_header(test_message.clone().into())
         .unwrap();
 
     // Poll both swarms until the first message is fully received by the listener.
@@ -266,11 +266,11 @@ async fn duplicate_message_received_from_different_peers() {
     let test_message = TestEncapsulatedMessage::new(b"msg");
     dialing_swarm_1
         .behaviour_mut()
-        .validate_and_publish_message(test_message.clone().into())
+        .publish_message_with_validated_header(test_message.clone().into())
         .unwrap();
     dialing_swarm_2
         .behaviour_mut()
-        .validate_and_publish_message(test_message.clone().into())
+        .publish_message_with_validated_header(test_message.clone().into())
         .unwrap();
 
     // Verify that the message is bubbled up to the swarm only once
@@ -329,7 +329,7 @@ async fn invalid_public_header_message_received() {
                 match listening_swarm_event {
                     SwarmEvent::Behaviour(Event::PeerDisconnected(peer_id, peer_state)) => {
                         assert_eq!(peer_id, *dialing_swarm.local_peer_id());
-                        assert_eq!(peer_state, NegotiatedPeerState::Spammy(SpamReason::InvalidPublicHeader));
+                        assert_eq!(peer_state, NegotiatedPeerState::Spammy(SpamReason::InvalidHeaderSignature));
                         events_to_match -= 1;
                     }
                     SwarmEvent::ConnectionClosed { peer_id, endpoint, .. } => {

@@ -4,7 +4,10 @@ use derivative::Derivative;
 use lb_blend_message::{
     Error,
     encap::{
-        encapsulated::EncapsulatedMessage, validated::EncapsulatedMessageWithVerifiedPublicHeader,
+        encapsulated::EncapsulatedMessage,
+        validated::{
+            EncapsulatedMessageWithVerifiedPublicHeader, EncapsulatedMessageWithVerifiedSignature,
+        },
     },
 };
 use lb_core::codec::{DeserializeOp as _, SerializeOp as _};
@@ -34,7 +37,7 @@ pub struct SessionCryptographicProcessorSettings {
 
 #[must_use]
 pub fn serialize_encapsulated_message(
-    message: &EncapsulatedMessageWithVerifiedPublicHeader,
+    message: &EncapsulatedMessageWithVerifiedSignature,
 ) -> Vec<u8> {
     message
         .to_bytes()
