@@ -80,20 +80,6 @@ pub struct SessionBoundEncapsulatedMessageWithVerifiedSignature {
     session: u64,
 }
 
-impl Deref for SessionBoundEncapsulatedMessageWithVerifiedSignature {
-    type Target = EncapsulatedMessageWithVerifiedSignature;
-
-    fn deref(&self) -> &Self::Target {
-        &self.message
-    }
-}
-
-impl DerefMut for SessionBoundEncapsulatedMessageWithVerifiedSignature {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.message
-    }
-}
-
 impl SessionBoundEncapsulatedMessageWithVerifiedSignature {
     #[must_use]
     pub(crate) const fn new(
@@ -101,6 +87,19 @@ impl SessionBoundEncapsulatedMessageWithVerifiedSignature {
         session: u64,
     ) -> Self {
         Self { message, session }
+    }
+
+    pub fn verify_proof_of_quota<Verifier>(
+        self,
+        verifier: &Verifier,
+    ) -> Result<SessionBoundEncapsulatedMessageWithVerifiedHeader, Error>
+    where
+        Verifier: ProofsVerifier,
+    {
+        Ok(SessionBoundEncapsulatedMessageWithVerifiedHeader {
+            message: self.message.verify_proof_of_quota(verifier)?,
+            session: self.session,
+        })
     }
 
     #[must_use]

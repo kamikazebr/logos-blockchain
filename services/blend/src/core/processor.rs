@@ -19,6 +19,7 @@ use lb_blend::{
     network::core::message::{
         SessionBoundDecapsulationOutput, SessionBoundEncapsulatedMessage,
         SessionBoundEncapsulatedMessageWithVerifiedHeader,
+        SessionBoundEncapsulatedMessageWithVerifiedSignature,
     },
     scheduling::message_blend::{
         crypto::{
@@ -165,11 +166,18 @@ impl<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>
 where
     ProofsVerifier: ProofsVerifierTrait,
 {
-    pub fn verify_message_header(
+    pub fn verify_local_message_header(
         &self,
         message: EncapsulatedMessage,
     ) -> Result<EncapsulatedMessageWithVerifiedPublicHeader, InnerError> {
         message.verify_public_header(self.0.verifier())
+    }
+
+    pub fn verify_received_message_poq(
+        &self,
+        message: SessionBoundEncapsulatedMessageWithVerifiedSignature,
+    ) -> Result<SessionBoundEncapsulatedMessageWithVerifiedHeader, InnerError> {
+        message.verify_proof_of_quota(self.0.verifier())
     }
 
     /// Semantically similar to the underlying
