@@ -3,7 +3,9 @@ use std::collections::VecDeque;
 
 use either::Either;
 use lb_blend_message::encap::validated::EncapsulatedMessageWithVerifiedSignature;
-use lb_blend_scheduling::{deserialize_encapsulated_message, serialize_encapsulated_message};
+use lb_blend_scheduling::{
+    deserialize_encapsulated_message, serialize_encapsulated_message_with_verified_signature,
+};
 use libp2p::{
     PeerId,
     swarm::{ConnectionId, NotifyHandler, ToSwarm},
@@ -37,7 +39,7 @@ where
         return Err(SendError::DuplicateMessage);
     }
 
-    let serialized_message = serialize_encapsulated_message(message);
+    let serialized_message = serialize_encapsulated_message_with_verified_signature(message);
 
     let mut at_least_one_receiver = false;
     peer_connections.for_each(|(peer_id, connection_id)| {

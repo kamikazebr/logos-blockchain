@@ -307,11 +307,13 @@ impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
     #[cfg(any(test, feature = "unsafe-test-functions"))]
     pub fn force_send_message_to_peer(
         &mut self,
-        message: EncapsulatedMessageWithVerifiedPublicHeader,
+        message: &EncapsulatedMessageWithVerifiedPublicHeader,
         peer_id: PeerId,
     ) -> Result<(), SendError> {
         let serialized_message =
-            lb_blend_scheduling::serialize_encapsulated_message(&(message.into()));
+            lb_blend_scheduling::serialize_encapsulated_message_with_verified_public_header(
+                message,
+            );
         self.force_send_serialized_message_to_peer(serialized_message, peer_id)
     }
 
