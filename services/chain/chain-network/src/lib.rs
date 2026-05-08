@@ -331,7 +331,10 @@ where
 
                     Some(block) = orphan_downloader.next(), if orphan_downloader.should_poll() => {
                         let header_id = block.header().id();
-                        info!("Processing block from orphan downloader: {header_id:?}");
+                        debug!(
+                            target: LOG_TARGET,
+                            "Processing block from orphan downloader: {header_id:?}"
+                        );
 
                         if !should_process_block(
                             relays.cryptarchia(),
@@ -476,7 +479,7 @@ where
     {
         match err {
             Error::Cryptarchia(lb_chain_service::api::ApiError::ParentMissing { parent, info }) => {
-                info!(
+                debug!(
                     target: LOG_TARGET, ?block_id, ?parent,
                     "Parent block missing. Trying to enqueue block for orphan processing",
                 );
@@ -699,7 +702,7 @@ where
                 block_slot,
                 current_slot,
             })) if attempt < max_retries => {
-                info!(
+                debug!(
                     target: LOG_TARGET,
                     ?block_id,
                     ?block_slot,

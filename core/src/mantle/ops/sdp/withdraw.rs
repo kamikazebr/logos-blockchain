@@ -1,5 +1,5 @@
 use lb_key_management_system_keys::keys::{ZkPublicKey, ZkSignature};
-use tracing::info;
+use tracing::debug;
 
 use super::{SDPWithdrawOp, SdpError};
 use crate::{
@@ -102,7 +102,7 @@ impl Operation for SDPWithdrawOp {
             .get(&self.declaration_id)
             .expect("The operation should have been validated");
 
-        info!(
+        debug!(
             provider_id = ?declaration.provider_id,
             nonce = self.nonce,
             "updated declaration with withdraw message"

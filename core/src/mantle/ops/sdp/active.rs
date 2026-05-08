@@ -1,5 +1,5 @@
 use lb_key_management_system_keys::keys::{ZkPublicKey, ZkSignature};
-use tracing::info;
+use tracing::debug;
 
 use super::{SDPActiveOp, SdpError};
 use crate::{
@@ -66,7 +66,7 @@ impl Operation for SDPActiveOp {
 
         declaration.active = ctx.block_number;
         declaration.nonce = self.nonce;
-        info!(
+        debug!(
             provider_id = ?declaration.provider_id,
             active = declaration.active,
             nonce = declaration.nonce,

@@ -670,7 +670,9 @@ where
                     }
 
                     () = async { prolonged_bootstrap_timer.as_mut().unwrap().as_mut().await }, if prolonged_bootstrap_timer.is_some() && cryptarchia.is_bootstrapping() => {
-                        info!("Prolonged Bootstrap Period has passed. Switching to Online.");
+                        info!(
+                            "Prolonged Bootstrap Period finished. Switching chain to online mode."
+                        );
                         (cryptarchia, storage_blocks_to_remove) = Self::switch_to_online(
                             cryptarchia,
                             &storage_blocks_to_remove,
@@ -689,7 +691,7 @@ where
                         match msg {
                             ConsensusMsg::IbdCompleted => {
                                 if chain_start_timer.is_none() {
-                                    info!("Received IBD completion notification. Starting prolonged bootstrap timer.");
+                                    info!("Initial Block Download completed. Starting Prolonged Bootstrap Period before going online.");
                                     // Start the prolonged bootstrap timer now that IBD is complete
                                     prolonged_bootstrap_timer = Some(Box::pin(tokio::time::sleep_until(
                                         Instant::now() + bootstrap_config.prolonged_bootstrap_period,
@@ -1000,6 +1002,28 @@ where
         }
     }
 
+    fn log_lib_advanced(
+        cryptarchia: &Cryptarchia,
+        prev_lib: HeaderId,
+        finalized_block: &BlockInfo,
+        pruned_blocks: &PrunedBlocks<HeaderId>,
+        reorged_blocks: &ReorgedBlocks<HeaderId>,
+    ) {
+        let tip_height = cryptarchia.consensus.tip_branch().length();
+
+        info!(
+            target: LOG_TARGET,
+            ?prev_lib,
+            new_lib = ?finalized_block.header_id,
+            tip_height,
+            lib_height = finalized_block.height,
+            stale_blocks = pruned_blocks.stale_blocks().count(),
+            immutable_blocks = pruned_blocks.immutable_blocks().len(),
+            reorged_blocks = reorged_blocks.len(),
+            "LIB advanced"
+        );
+    }
+
     /// Try to add a [`Block`] to [`Cryptarchia`].
     ///
     /// A [`Block`] is only added if it's valid.
@@ -1018,7 +1042,7 @@ where
         new_block_subscription_sender: &broadcast::Sender<ProcessedBlockEvent>,
         lib_broadcaster: &broadcast::Sender<LibUpdate>,
     ) -> Result<(PrunedBlocks<HeaderId>, Vec<Tx>), Error> {
-        debug!("Received proposal with ID: {:?}", block.header().id());
+        debug!(target: LOG_TARGET, "Received proposal with ID: {:?}", block.header().id());
         let header = block.header();
         let prev_lib = cryptarchia.lib();
 
@@ -1067,23 +1091,18 @@ where
         }
 
         if prev_lib != new_lib {
-            debug!(
-                target: LOG_TARGET,
-                "LIB advanced from {prev_lib:?} to {new_lib:?}; stale_blocks={}, immutable_blocks={}, reorged_blocks={}",
-                pruned_blocks.stale_blocks().count(),
-                pruned_blocks.immutable_blocks().len(),
-                reorged_blocks.len()
-            );
-            let height = cryptarchia
-                .consensus
-                .branches()
-                .get(&cryptarchia.lib())
-                .expect("LIB branch not available")
-                .length();
             let block_info = BlockInfo {
-                height,
+                height: cryptarchia.consensus.lib_branch().length(),
                 header_id: new_lib,
             };
+            Self::log_lib_advanced(
+                cryptarchia,
+                prev_lib,
+                &block_info,
+                &pruned_blocks,
+                &reorged_blocks,
+            );
+
             if let Err(e) = broadcast_finalized_block(relays.broadcast_relay(), block_info).await {
                 warn!("Failed to notify finalized-block subscribers: {e}");
             }
@@ -1251,7 +1270,7 @@ where
     ) -> (Cryptarchia, PrunedBlocks<HeaderId>) {
         info!(
             target: LOG_TARGET, tip = ?self.state.tip, lib = ?self.state.lib, lib_height = self.state.lib_block_length, genesis = ?self.state.genesis_id,
-            "initializing cryptarchia from state recovery",
+            "recovering chain state",
         );
 
         let lib_id = self.state.lib;
@@ -1292,7 +1311,7 @@ where
         // Phase 1: Collect only block IDs in (LIB, tip].
         info!(
             target: LOG_TARGET, lib = ?lib_id, tip = ?self.state.tip,
-            "loading block IDs from storage: (lib, tip]",
+            "loading stored blocks for chain recovery",
         );
         let ids: Vec<HeaderId> = Self::load_block_ids_from_storage(
             self.state.tip,
@@ -1306,7 +1325,7 @@ where
         });
         // Reverse to get LIB->tip order, and skip LIB since we already have it
         let ids = ids.into_iter().rev().skip(1);
-        info!(target: LOG_TARGET, "collected {} block IDs from storage: (lib, tip]", ids.len());
+        info!(target: LOG_TARGET, "found {} stored blocks to replay during chain recovery", ids.len());
 
         // Phase 2: Load each block individually (lib→tip order) and apply it.
         let mut pruned_blocks = PrunedBlocks::new();
@@ -1341,7 +1360,7 @@ where
 
         info!(
             target: LOG_TARGET, tip_height = cryptarchia.consensus.tip_branch().length(), lib_height = cryptarchia.consensus.lib_branch().length(),
-            "{n_blocks} blocks recovered. finishing initialization",
+            "{n_blocks} blocks replayed. Chain recovery finished",
         );
 
         (cryptarchia, pruned_blocks)
@@ -1509,7 +1528,7 @@ where
         chain_online_notifier: &ChainOnlineNotifier,
     ) -> (Cryptarchia, HashSet<HeaderId>) {
         let (cryptarchia, pruned_blocks) = cryptarchia.online();
-        info!("Chain switched to Online mode");
+        info!("Node is online and following the chain");
 
         chain_online_notifier.notify();
 

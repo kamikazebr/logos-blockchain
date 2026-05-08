@@ -173,7 +173,7 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
                 error,
                 ..
             } => {
-                tracing::error!(
+                tracing::warn!(
                     "Failed to connect to peer: {peer_id:?} {connection_id:?} due to: {error}"
                 );
                 crate::metrics::network_dial_failures();

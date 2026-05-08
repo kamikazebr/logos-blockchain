@@ -190,7 +190,7 @@ impl Default for TracingSettings {
             filter: FilterLayerSettings::None,
             metrics: MetricsLayerSettings::None,
             console: ConsoleLayerSettings::None,
-            level: Level::DEBUG,
+            level: Level::INFO,
         }
     }
 }
@@ -358,7 +358,7 @@ where
 }
 
 /// Resolves the configured filter settings, falling back to the shared
-/// default verbose filter policy when no explicit filter was provided.
+/// default filter policy when no explicit filter was provided.
 fn effective_filter_settings(config: &TracingSettings) -> FilterLayerSettings {
     match &config.filter {
         FilterLayerSettings::EnvFilter(filter) => FilterLayerSettings::EnvFilter(filter.clone()),
