@@ -183,19 +183,10 @@ fn decode_channel_withdraw(input: &[u8]) -> IResult<&[u8], ChannelWithdrawOp> {
 
 fn decode_sdp_declare(input: &[u8]) -> IResult<&[u8], SDPDeclareOp> {
     // SDPDeclare = ServiceType LocatorCount *Locator ProviderId ZkId LockedNoteId
-    let (input, service_type_byte) = decode_byte(input)?;
-    let service_type = match service_type_byte {
-        0 => ServiceType::BlendNetwork,
-        _ => return Err(nom::Err::Error(Error::new(input, ErrorKind::Fail))),
-    };
+    let (input, service_type) = map_res(decode_byte, ServiceType::try_from).parse(input)?;
     let (input, locator_count) = decode_byte(input)?;
 
-    let (input, multiaddrs) = count(decode_locator, locator_count as usize).parse(input)?;
-    let locators = multiaddrs
-        .into_iter()
-        .map(Locator::try_from)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|_| nom::Err::Error(Error::new(input, ErrorKind::Fail)))?;
+    let (input, locators) = count(decode_locator, locator_count as usize).parse(input)?;
     let (input, provider_key) = decode_ed25519_public_key(input)?;
     let provider_id = ProviderId(provider_key);
     let (input, zk_fr) = decode_field_element(input)?;
@@ -214,7 +205,7 @@ fn decode_sdp_declare(input: &[u8]) -> IResult<&[u8], SDPDeclareOp> {
     ))
 }
 
-fn decode_locator(input: &[u8]) -> IResult<&[u8], Multiaddr> {
+fn decode_locator(input: &[u8]) -> IResult<&[u8], Locator> {
     // Locator = 2Byte *BYTE
     let (input, len_bytes) = take(2usize).parse(input)?;
     let len = u16::from_le_bytes([len_bytes[0], len_bytes[1]]) as usize;
@@ -222,7 +213,9 @@ fn decode_locator(input: &[u8]) -> IResult<&[u8], Multiaddr> {
         return Err(nom::Err::Error(Error::new(input, ErrorKind::LengthValue)));
     }
     map_res(take(len), |bytes: &[u8]| {
-        Multiaddr::try_from(bytes.to_vec()).map_err(|_| Error::new(bytes, ErrorKind::Fail))
+        Multiaddr::try_from(bytes.to_vec())
+            .map_err(|_| Error::new(bytes, ErrorKind::Fail))
+            .and_then(|m| Locator::try_from(m).map_err(|_| Error::new(bytes, ErrorKind::Fail)))
     })
     .parse(input)
 }
@@ -312,7 +305,9 @@ fn decode_inputs(input: &[u8]) -> IResult<&[u8], Inputs> {
 
     let (input, note_ids) =
         count(map(decode_field_element, NoteId), input_count as usize).parse(input)?;
-    Ok((input, Inputs::new(note_ids)))
+    let inputs =
+        Inputs::new(note_ids).map_err(|_| nom::Err::Error(Error::new(input, ErrorKind::Verify)))?;
+    Ok((input, inputs))
 }
 
 fn decode_outputs(input: &[u8]) -> IResult<&[u8], Outputs> {
@@ -320,7 +315,9 @@ fn decode_outputs(input: &[u8]) -> IResult<&[u8], Outputs> {
     let (input, output_count) = decode_byte(input)?;
     let (input, notes) = count(decode_note, output_count as usize).parse(input)?;
 
-    Ok((input, Outputs::new(notes)))
+    let outputs =
+        Outputs::new(notes).map_err(|_| nom::Err::Error(Error::new(input, ErrorKind::Verify)))?;
+    Ok((input, outputs))
 }
 
 fn decode_transfer(input: &[u8]) -> IResult<&[u8], TransferOp> {
@@ -691,10 +688,7 @@ fn encode_sdp_declare(op: &SDPDeclareOp) -> Vec<u8> {
     );
     let mut bytes = Vec::new();
     // ServiceType
-    let service_type_byte = match op.service_type {
-        ServiceType::BlendNetwork => 0u8,
-    };
-    bytes.extend(encode_byte(service_type_byte));
+    bytes.extend(encode_byte(op.service_type.into()));
     // Locators
     bytes.extend(encode_byte(op.locators.len() as u8));
     for locator in &op.locators {
@@ -1214,7 +1208,10 @@ mod tests {
         let pk = ZkPublicKey::from(BigUint::from(42u64));
         let note = Note::new(1000, pk);
         let note_id = NoteId(BigUint::from(123u64).into());
-        let transfer_op = TransferOp::new(Inputs::new(vec![note_id]), Outputs::new(vec![note]));
+        let transfer_op = TransferOp::new(
+            Inputs::new_unchecked(vec![note_id]),
+            Outputs::new_unchecked(vec![note]),
+        );
 
         let original_tx = MantleTx(vec![Op::Transfer(transfer_op)]);
 
@@ -1517,8 +1514,8 @@ mod tests {
         let note_id3 = NoteId(BigUint::from(333u64).into());
 
         let transfer_op = TransferOp::new(
-            Inputs::new(vec![note_id1, note_id2, note_id3]),
-            Outputs::new(vec![note1, note2]),
+            Inputs::new_unchecked(vec![note_id1, note_id2, note_id3]),
+            Outputs::new_unchecked(vec![note1, note2]),
         );
 
         let mantle_tx = MantleTx(vec![Op::Transfer(transfer_op)]);
@@ -1560,8 +1557,8 @@ mod tests {
 
         let locked_note_sk = ZkKey::from(BigUint::from(1u64));
         let transfer_op = TransferOp {
-            inputs: Inputs::new(vec![NoteId(BigUint::from(777u64).into())]),
-            outputs: Outputs::new(vec![Note::new(5000, locked_note_sk.to_public_key())]),
+            inputs: Inputs::new_unchecked(vec![NoteId(BigUint::from(777u64).into())]),
+            outputs: Outputs::new_unchecked(vec![Note::new(5000, locked_note_sk.to_public_key())]),
         };
 
         let locator: Multiaddr = "/dns4/example.com/tcp/443".parse().unwrap();
@@ -1699,7 +1696,7 @@ mod tests {
         let signing_key = Ed25519Key::from_bytes(&[21u8; 32]);
         let mantle_tx = MantleTx(vec![Op::ChannelWithdraw(ChannelWithdrawOp {
             channel_id: ChannelId::from([0xAB; 32]),
-            outputs: Outputs::new(vec![note1, note2]),
+            outputs: Outputs::new_unchecked(vec![note1, note2]),
             withdraw_nonce: 0,
         })]);
         let tx_hash = mantle_tx.hash();

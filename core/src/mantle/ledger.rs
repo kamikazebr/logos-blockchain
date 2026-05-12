@@ -65,8 +65,23 @@ pub enum LedgerError {
 pub struct Outputs(Vec<Note>);
 
 impl Outputs {
+    /// Construct `Outputs` after enforcing the structural invariant that no
+    /// note has zero value.
+    pub fn new(notes: Vec<Note>) -> Result<Self, OutputsError> {
+        for note in &notes {
+            if note.value == 0 {
+                return Err(OutputsError::ZeroValueNote);
+            }
+        }
+        Ok(Self(notes))
+    }
+
+    /// Construct `Outputs` without validation.
+    ///
+    /// Reserved for callers that have already validated the notes (e.g.,
+    /// trusted internal state). Prefer [`Self::new`] at trust boundaries.
     #[must_use]
-    pub const fn new(notes: Vec<Note>) -> Self {
+    pub const fn new_unchecked(notes: Vec<Note>) -> Self {
         Self(notes)
     }
 
@@ -84,16 +99,6 @@ impl Outputs {
             output_index: index,
             note: *note,
         })
-    }
-
-    pub fn validate(&self) -> Result<(), OutputsError> {
-        // Check that there is no duplicate
-        for note in &self.0 {
-            if note.value == 0 {
-                return Err(OutputsError::ZeroValueNote);
-            }
-        }
-        Ok(())
     }
 
     pub fn execute<O: OpId>(&self, mut utxos: Utxos, op: &O) -> Utxos {
@@ -153,18 +158,30 @@ impl<'output> IntoIterator for &'output Outputs {
 pub struct Inputs(Vec<NoteId>);
 
 impl Inputs {
+    /// Construct `Inputs` after enforcing the structural invariant that no
+    /// `NoteId` appears more than once (no in-tx double spend).
+    pub fn new(note_ids: Vec<NoteId>) -> Result<Self, InputsError> {
+        let unique: HashSet<_> = note_ids.iter().collect();
+        if unique.len() != note_ids.len() {
+            return Err(InputsError::DoubleSpend);
+        }
+        Ok(Self(note_ids))
+    }
+
+    /// Construct `Inputs` without validation.
+    ///
+    /// Reserved for callers that have already validated the ids (e.g.,
+    /// trusted internal state). Prefer [`Self::new`] at trust boundaries.
     #[must_use]
-    pub const fn new(note_ids: Vec<NoteId>) -> Self {
+    pub const fn new_unchecked(note_ids: Vec<NoteId>) -> Self {
         Self(note_ids)
     }
 
+    /// Validate this `Inputs` against external ledger state.
+    ///
+    /// Structural uniqueness is already enforced by [`Self::new`], so this
+    /// only checks that every input refers to an existing, unlocked UTXO.
     pub fn validate(&self, locked_notes: &LockedNotes, utxos: &Utxos) -> Result<(), InputsError> {
-        // Check that there is no duplicate
-        let unique: HashSet<_> = self.0.iter().collect();
-        if unique.len() != self.0.len() {
-            return Err(InputsError::DoubleSpend);
-        }
-        // Check each note is spendable
         for input in &self.0 {
             // Check the note isn't locked
             if locked_notes.contains(input) {

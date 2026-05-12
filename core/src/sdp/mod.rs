@@ -121,10 +121,25 @@ impl AsRef<str> for ServiceType {
     }
 }
 
-impl From<ServiceType> for usize {
+#[derive(Debug, thiserror::Error, Eq, PartialEq)]
+#[error("Unknown ServiceType byte: {0}")]
+pub struct InvalidServiceTypeByte(pub u8);
+
+impl From<ServiceType> for u8 {
     fn from(service_type: ServiceType) -> Self {
         match service_type {
             ServiceType::BlendNetwork => 0,
+        }
+    }
+}
+
+impl TryFrom<u8> for ServiceType {
+    type Error = InvalidServiceTypeByte;
+
+    fn try_from(byte: u8) -> Result<Self, Self::Error> {
+        match byte {
+            0 => Ok(Self::BlendNetwork),
+            other => Err(InvalidServiceTypeByte(other)),
         }
     }
 }

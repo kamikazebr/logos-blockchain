@@ -134,10 +134,10 @@ fn with_transfer_input_chunks(
     let mut builder = tx_builder.clone();
     for chunk in funding_utxos[..split_index].chunks(ZKSIGN_MAX_INPUTS) {
         builder = builder.push_op(Op::Transfer(TransferOp::new(
-            Inputs::new(chunk.iter().map(Utxo::id).collect()),
+            Inputs::new_unchecked(chunk.iter().map(Utxo::id).collect()),
             // Intermediate chunks intentionally emit no outputs so the final
             // transfer can carry the user-visible outputs and any change.
-            Outputs::new(vec![]),
+            Outputs::new_unchecked(vec![]),
         )));
     }
 

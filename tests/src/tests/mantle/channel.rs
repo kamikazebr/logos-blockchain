@@ -86,7 +86,7 @@ async fn channel_deposit() {
         tip: None,
         deposit: DepositOp {
             channel_id,
-            inputs: Inputs::new(vec![note_id]),
+            inputs: Inputs::new_unchecked(vec![note_id]),
             metadata: format!("Mint {selected_deposit_amount} to Alice in Zone").into_bytes(),
         },
         change_public_key: funding_pk,

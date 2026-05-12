@@ -705,8 +705,8 @@ mod tests {
         // - alice is minted 104 NMO in two notes (100 NMO and 4 NMO)
         // - voucher v1 is ours -> should be tracked
         let transfer1 = TransferOp {
-            inputs: Inputs::new(vec![]),
-            outputs: Outputs::new(vec![Note::new(100, alice), Note::new(4, alice)]),
+            inputs: Inputs::new_unchecked(vec![]),
+            outputs: Outputs::new_unchecked(vec![Note::new(100, alice), Note::new(4, alice)]),
         };
         // immediately lock the 2nd note from `transfer1`
         let locked_note = transfer1.outputs.utxo_by_index(1, &transfer1).unwrap().id();
@@ -740,8 +740,8 @@ mod tests {
             voucher_cm: v2_cm,
             spent_notes: vec![alice_100_nmo_utxo.id()],
             transfers: vec![TransferOp {
-                inputs: Inputs::new(vec![alice_100_nmo_utxo.id()]),
-                outputs: Outputs::new(vec![Note::new(20, bob), Note::new(80, alice)]),
+                inputs: Inputs::new_unchecked(vec![alice_100_nmo_utxo.id()]),
+                outputs: Outputs::new_unchecked(vec![Note::new(20, bob), Note::new(80, alice)]),
             }],
             // Unknown locked note that will be ignored
             locked_notes: HashSet::from([NoteId::from(Fr::ONE)]),
@@ -847,11 +847,11 @@ mod tests {
 
         if let Op::Transfer(transfer_op) = &funded_tx.ops()[funded_tx.ops().len() - 1] {
             // ensure alices utxo was used to pay the fee
-            assert_eq!(transfer_op.inputs, Inputs::new(vec![utxo2.id()]));
+            assert_eq!(transfer_op.inputs, Inputs::new_unchecked(vec![utxo2.id()]));
             // ensure change was returned to alice
             assert_eq!(
                 transfer_op.outputs,
-                Outputs::new(vec![Note {
+                Outputs::new_unchecked(vec![Note {
                     value: 4206,
                     pk: alice,
                 }])
@@ -1017,7 +1017,7 @@ mod tests {
         if let Op::Transfer(transfer_op) =
             &funded_tx_wo_change.ops()[funded_tx_wo_change.ops().len() - 1]
         {
-            assert_eq!(transfer_op.outputs, Outputs::new(vec![]));
+            assert_eq!(transfer_op.outputs, Outputs::new_unchecked(vec![]));
         } else {
             panic!("last op must be a transfer")
         }
@@ -1072,7 +1072,10 @@ mod tests {
         if let Op::Transfer(transfer_op) =
             &funded_tx_wo_change.ops()[funded_tx_wo_change.ops().len() - 1]
         {
-            assert_eq!(transfer_op.outputs, Outputs::new(vec![Note::new(1, alice)]));
+            assert_eq!(
+                transfer_op.outputs,
+                Outputs::new_unchecked(vec![Note::new(1, alice)])
+            );
         } else {
             panic!("the last operation must be a transfer")
         }

@@ -727,7 +727,10 @@ mod tests {
     type HeaderId = [u8; 32];
 
     fn create_tx(inputs: Vec<NoteId>, outputs: Vec<Note>, sks: &[ZkKey]) -> SignedMantleTx {
-        let transfer_op = TransferOp::new(Inputs::new(inputs), Outputs::new(outputs));
+        let transfer_op = TransferOp::new(
+            Inputs::new_unchecked(inputs),
+            Outputs::new_unchecked(outputs),
+        );
         let mantle_tx = MantleTx(vec![Op::Transfer(transfer_op)]);
         SignedMantleTx {
             ops_proofs: vec![OpProof::ZkSig(
@@ -970,7 +973,7 @@ mod tests {
         // Submit a deposit operation
         let deposit = DepositOp {
             channel_id,
-            inputs: Inputs::new(vec![utxo.id()]),
+            inputs: Inputs::new_unchecked(vec![utxo.id()]),
             metadata: vec![5, 6, 7, 8],
         };
         let ops = vec![Op::ChannelDeposit(deposit)];
@@ -1011,7 +1014,7 @@ mod tests {
         // Deposit some funds into the channel
         let deposit = DepositOp {
             channel_id,
-            inputs: Inputs::new(vec![utxo.id()]),
+            inputs: Inputs::new_unchecked(vec![utxo.id()]),
             metadata: vec![5, 6, 7, 8],
         };
         let deposit_ops = vec![Op::ChannelDeposit(deposit)];
@@ -1043,7 +1046,7 @@ mod tests {
         };
         let withdraw = ChannelWithdrawOp {
             channel_id,
-            outputs: Outputs::new(vec![withdraw_note]),
+            outputs: Outputs::new_unchecked(vec![withdraw_note]),
             withdraw_nonce: 0,
         };
         let withdraw_tx = MantleTx(vec![Op::ChannelWithdraw(withdraw.clone())]);
@@ -1098,7 +1101,7 @@ mod tests {
         // Deposit some funds into the channel
         let deposit = DepositOp {
             channel_id,
-            inputs: Inputs::new(vec![utxo.id()]),
+            inputs: Inputs::new_unchecked(vec![utxo.id()]),
             metadata: vec![],
         };
         let deposit_ops = vec![Op::ChannelDeposit(deposit)];
@@ -1126,7 +1129,7 @@ mod tests {
         };
         let withdraw = ChannelWithdrawOp {
             channel_id,
-            outputs: Outputs::new(vec![withdraw_note]),
+            outputs: Outputs::new_unchecked(vec![withdraw_note]),
             withdraw_nonce: 0,
         };
         let wrong_key = Ed25519Key::from_bytes(&[42; 32]);

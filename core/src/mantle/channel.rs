@@ -222,7 +222,7 @@ mod tests {
 
         let deposit_op = DepositOp {
             channel_id,
-            inputs: Inputs::new(vec![utxo.id()]),
+            inputs: Inputs::new_unchecked(vec![utxo.id()]),
             metadata: vec![],
         };
 
@@ -251,7 +251,7 @@ mod tests {
 
         let withdraw_op = ChannelWithdrawOp {
             channel_id,
-            outputs: Outputs::new(vec![Note {
+            outputs: Outputs::new_unchecked(vec![Note {
                 value: 6,
                 pk: ZkPublicKey::zero(),
             }]),
@@ -282,7 +282,7 @@ mod tests {
 
         let withdraw_op = ChannelWithdrawOp {
             channel_id,
-            outputs: Outputs::new(vec![Note {
+            outputs: Outputs::new_unchecked(vec![Note {
                 value: 6,
                 pk: ZkPublicKey::zero(),
             }]),
@@ -307,7 +307,7 @@ mod tests {
 
         let withdraw_op = ChannelWithdrawOp {
             channel_id,
-            outputs: Outputs::new(vec![Note {
+            outputs: Outputs::new_unchecked(vec![Note {
                 value: 6,
                 pk: ZkPublicKey::zero(),
             }]),

@@ -1543,7 +1543,7 @@ mod tests {
         let (sk, utxo) = utxo_with_sk();
         let deposit_op = DepositOp {
             channel_id,
-            inputs: Inputs::new(vec![utxo.id()]),
+            inputs: Inputs::new_unchecked(vec![utxo.id()]),
             metadata: "to Alice".into(),
         };
 

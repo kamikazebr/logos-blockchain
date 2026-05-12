@@ -26,6 +26,9 @@ pub enum Error {
     /// unsupported ops).
     #[error("Invalid genesis transaction: {0}")]
     InvalidGenesisTx(#[from] genesis_tx::Error),
+    /// The supplied output notes failed structural validation.
+    #[error("Invalid outputs: {0}")]
+    InvalidOutputs(#[from] crate::mantle::ledger::OutputsError),
 }
 
 /// Convenience [`Result`](core::result::Result) alias for genesis block
@@ -1086,8 +1089,8 @@ impl GenesisBlockBuilder<WithAll> {
         } = self;
         // Order is important to keep here
         let ops: Vec<Op> = std::iter::once(Op::Transfer(TransferOp::new(
-            Inputs::new(vec![]),
-            Outputs::new(notes),
+            Inputs::new_unchecked(vec![]),
+            Outputs::new(notes)?,
         )))
         .chain(std::iter::once(Op::ChannelInscribe(inscription)))
         .chain(sdp_declarations.into_iter().map(Op::SDPDeclare))
@@ -1189,8 +1192,8 @@ mod tests {
     fn make_signed_genesis_tx(extra_ops: Vec<Op>) -> SignedMantleTx {
         let mut ops = vec![
             Op::Transfer(TransferOp::new(
-                Inputs::new(vec![]),
-                Outputs::new(vec![make_note(1_000)]),
+                Inputs::new_unchecked(vec![]),
+                Outputs::new_unchecked(vec![make_note(1_000)]),
             )),
             Op::ChannelInscribe(valid_inscription()),
         ];

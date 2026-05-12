@@ -43,9 +43,6 @@ impl Operation<WithdrawValidationContext<'_>> for ChannelWithdrawOp {
     type Error = Error;
 
     fn validate(&self, ctx: &WithdrawValidationContext<'_>) -> Result<(), Self::Error> {
-        // Check that the outputs are valid
-        self.outputs.validate()?;
-
         // Check that the channel exist
         if !ctx.channels.channels.contains_key(&self.channel_id) {
             return Err(Error::ChannelNotFound {

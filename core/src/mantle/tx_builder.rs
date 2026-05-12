@@ -31,7 +31,10 @@ impl MantleTxBuilder {
         Self {
             mantle_tx: vec![].into(),
             ledger_inputs: vec![],
-            pending_transfer: TransferOp::new(Inputs::new(vec![]), Outputs::new(vec![])),
+            pending_transfer: TransferOp::new(
+                Inputs::new_unchecked(vec![]),
+                Outputs::new_unchecked(vec![]),
+            ),
             channel_withdraw_proofs: HashMap::new(),
             context,
         }
@@ -244,7 +247,7 @@ mod tests {
         // Build an operation
         let op = DepositOp {
             channel_id: [0; 32].into(),
-            inputs: Inputs::new(vec![NoteId(Fr::ZERO)]),
+            inputs: Inputs::new_unchecked(vec![NoteId(Fr::ZERO)]),
             metadata: b"Mint 1 to Alice in Zone".to_vec(),
         };
 
@@ -269,7 +272,7 @@ mod tests {
         };
         let op = ChannelWithdrawOp {
             channel_id: [0; 32].into(),
-            outputs: Outputs::new(vec![withdraw_note]),
+            outputs: Outputs::new_unchecked(vec![withdraw_note]),
             withdraw_nonce: 0,
         };
 
@@ -359,12 +362,12 @@ mod tests {
             }))
             .push_op(Op::ChannelDeposit(DepositOp {
                 channel_id,
-                inputs: Inputs::new(vec![NoteId(Fr::ZERO)]),
+                inputs: Inputs::new_unchecked(vec![NoteId(Fr::ZERO)]),
                 metadata: b"Mint 10 to Alice in Zone".to_vec(),
             }))
             .push_op(Op::ChannelWithdraw(ChannelWithdrawOp {
                 channel_id,
-                outputs: Outputs::new(vec![withdraw_note]),
+                outputs: Outputs::new_unchecked(vec![withdraw_note]),
                 withdraw_nonce: 0,
             }))
             .push_op(Op::LeaderClaim(LeaderClaimOp {
@@ -408,7 +411,7 @@ mod tests {
         let builder = MantleTxBuilder::new(context)
             .push_op(Op::ChannelDeposit(DepositOp {
                 channel_id: [0; 32].into(),
-                inputs: Inputs::new(vec![deposit_input]),
+                inputs: Inputs::new_unchecked(vec![deposit_input]),
                 metadata: vec![],
             }))
             .push_op(Op::SDPDeclare(SDPDeclareOp {

@@ -1379,7 +1379,7 @@ async fn test_subscribe_to_finalized_deposit() {
         .expect("should find a note with sufficient balance for deposit");
     let deposit = DepositOp {
         channel_id,
-        inputs: Inputs::new(vec![note_id]),
+        inputs: Inputs::new_unchecked(vec![note_id]),
         metadata: format!("Mint {deposit_amount} to Alice in Zone").into_bytes(),
     };
     let pk = validator.config().user.cryptarchia.leader.wallet.funding_pk;
@@ -1452,16 +1452,16 @@ async fn test_atomic_deposit_inscription() {
 
     let change = note_value.checked_sub(deposit_amount).unwrap();
     let transfer = TransferOp {
-        inputs: Inputs::new(vec![note_id]),
+        inputs: Inputs::new_unchecked(vec![note_id]),
         outputs: if change > 0 {
-            Outputs::new(vec![deposit_note, Note::new(change, pk)])
+            Outputs::new_unchecked(vec![deposit_note, Note::new(change, pk)])
         } else {
-            Outputs::new(vec![deposit_note])
+            Outputs::new_unchecked(vec![deposit_note])
         },
     };
     let deposit = DepositOp {
         channel_id,
-        inputs: Inputs::new(vec![
+        inputs: Inputs::new_unchecked(vec![
             transfer
                 .outputs
                 .utxo_by_index(0, &transfer)
@@ -1563,7 +1563,7 @@ async fn test_subscribe_to_finalized_withdraw() {
         .expect("should find a note with sufficient balance for deposit");
     let deposit = DepositOp {
         channel_id,
-        inputs: Inputs::new(vec![deposit_note_id]),
+        inputs: Inputs::new_unchecked(vec![deposit_note_id]),
         metadata: b"Mint 3 to Alice in Zone".to_vec(),
     };
     submit_deposit(validator, deposit.clone(), pk).await;
@@ -1574,7 +1574,7 @@ async fn test_subscribe_to_finalized_withdraw() {
     // Withdraw 1 from the channel
     let withdraw = ChannelWithdrawOp {
         channel_id,
-        outputs: Outputs::new(vec![Note::new(2, pk)]),
+        outputs: Outputs::new_unchecked(vec![Note::new(2, pk)]),
         withdraw_nonce: 0,
     };
     let inscription_data = b"Burn 2".to_vec();
