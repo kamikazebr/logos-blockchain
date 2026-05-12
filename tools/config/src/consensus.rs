@@ -8,11 +8,14 @@ use lb_core::{
         genesis_tx::GenesisTx,
         ops::{
             Op, OpId as _,
-            channel::{ChannelId, Ed25519PublicKey, MsgId, inscribe::InscriptionOp},
+            channel::{
+                ChannelId, Ed25519PublicKey, MsgId,
+                inscribe::{InscriptionBytes, InscriptionOp},
+            },
             transfer::TransferOp,
         },
     },
-    sdp::{DeclarationMessage, Locator, ProviderId, ServiceType},
+    sdp::{DeclarationLocators, DeclarationMessage, Locator, ProviderId, ServiceType},
 };
 use lb_groth16::{CompressedGroth16Proof, Field as _, Fr};
 use lb_key_management_system_service::keys::{
@@ -99,12 +102,14 @@ fn inscription_for_current_test(test_context: Option<&str>) -> InscriptionOp {
     println!("Genesis inscription: {owner}");
     InscriptionOp {
         channel_id: ChannelId::from(EMPTY_CHANNEL_ID),
-        inscription: CryptarchiaParameter {
-            chain_id: owner,
-            genesis_time: get_or_init_genesis_time(),
-            epoch_nonce: Fr::ZERO,
-        }
-        .encode(),
+        inscription: InscriptionBytes::new_unchecked(
+            CryptarchiaParameter {
+                chain_id: owner,
+                genesis_time: get_or_init_genesis_time(),
+                epoch_nonce: Fr::ZERO,
+            }
+            .encode(),
+        ),
         parent: MsgId::root(),
         signer: Ed25519PublicKey::from_bytes(&EMPTY_ED25519_PUBLIC_KEY).unwrap(),
     }
@@ -282,7 +287,7 @@ pub fn create_genesis_block_with_declarations(
         };
         let declaration = DeclarationMessage {
             service_type: provider.service_type,
-            locators: vec![provider.locator.clone()],
+            locators: DeclarationLocators::new_unchecked(vec![provider.locator.clone()]),
             provider_id: provider.provider_id(),
             zk_id: provider.zk_id(),
             locked_note_id: utxo.id(),

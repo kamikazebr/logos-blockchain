@@ -122,7 +122,7 @@ fn valid_cryptarchia_inscription(
         ))));
     }
 
-    CryptarchiaParameter::decode(&inscription.inscription)
+    CryptarchiaParameter::decode(inscription.inscription.as_slice())
 }
 
 impl Transaction for GenesisTx {

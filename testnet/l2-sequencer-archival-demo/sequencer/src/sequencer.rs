@@ -7,7 +7,10 @@ use lb_core::{
         MantleTx, SignedMantleTx, Transaction as _,
         ops::{
             Op, OpProof,
-            channel::{ChannelId, Ed25519PublicKey, MsgId, inscribe::InscriptionOp},
+            channel::{
+                ChannelId, Ed25519PublicKey, MsgId,
+                inscribe::{InscriptionBytes, InscriptionOp},
+            },
         },
     },
 };
@@ -160,7 +163,7 @@ impl Sequencer {
 
         let inscribe_op = InscriptionOp {
             channel_id: self.channel_id,
-            inscription: data,
+            inscription: InscriptionBytes::new_unchecked(data),
             parent,
             signer: verifying_key,
         };

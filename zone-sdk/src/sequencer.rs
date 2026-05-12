@@ -9,7 +9,9 @@ use lb_core::{
         ops::{
             Op, OpProof,
             channel::{
-                ChannelId, Ed25519PublicKey, MsgId, inscribe::InscriptionOp, set_keys::SetKeysOp,
+                ChannelId, Ed25519PublicKey, MsgId,
+                inscribe::{InscriptionBytes, InscriptionOp},
+                set_keys::{SetKeysKeys, SetKeysOp},
             },
         },
         tx::TxHash,
@@ -468,7 +470,7 @@ where
                             tx.clone(),
                             inscribe.parent,
                             inscribe.id(),
-                            inscribe.inscription.clone(),
+                            inscribe.inscription.as_slice().to_vec(),
                         );
                         is_inscription = true;
                         break;
@@ -1368,7 +1370,7 @@ fn extract_inscriptions(txs: &[SignedMantleTx], channel_id: ChannelId) -> Vec<In
                         tx_hash: tx.mantle_tx.hash(),
                         parent_msg: inscribe.parent,
                         this_msg: inscribe.id(),
-                        payload: inscribe.inscription.clone(),
+                        payload: inscribe.inscription.as_slice().to_vec(),
                     })
                 } else {
                     None
@@ -1420,7 +1422,7 @@ fn create_inscribe_tx(
 
     let inscribe_op = InscriptionOp {
         channel_id,
-        inscription,
+        inscription: InscriptionBytes::new_unchecked(inscription),
         parent,
         signer,
     };
@@ -1447,7 +1449,7 @@ fn create_set_keys_tx(
 ) -> SignedMantleTx {
     let set_keys_op = SetKeysOp {
         channel: channel_id,
-        keys,
+        keys: SetKeysKeys::new_unchecked(keys),
     };
 
     // TODO: fund tx
@@ -1471,7 +1473,7 @@ fn prepare_tx(
 ) -> (MantleTx, MsgId, Ed25519Signature) {
     let inscription_op = InscriptionOp {
         channel_id,
-        inscription,
+        inscription: InscriptionBytes::new_unchecked(inscription),
         parent,
         signer: signing_key.public_key(),
     };

@@ -191,13 +191,13 @@ fn op_to_zone_message(op: &Op, channel_id: ChannelId) -> Option<ZoneMessage> {
         Op::ChannelInscribe(inscribe) if inscribe.channel_id == channel_id => {
             Some(ZoneMessage::Block(ZoneBlock {
                 id: inscribe.id(),
-                data: inscribe.inscription.clone(),
+                data: inscribe.inscription.as_slice().to_vec(),
             }))
         }
         Op::ChannelDeposit(deposit) if deposit.channel_id == channel_id => {
             Some(ZoneMessage::Deposit(Deposit {
                 inputs: deposit.inputs.clone(),
-                metadata: deposit.metadata.clone(),
+                metadata: deposit.metadata.as_slice().to_vec(),
             }))
         }
         Op::ChannelWithdraw(withdraw) if withdraw.channel_id == channel_id => {

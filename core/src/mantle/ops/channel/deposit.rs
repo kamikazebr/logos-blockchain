@@ -2,6 +2,7 @@ use lb_key_management_system_keys::keys::{ZkPublicKey, ZkSignature};
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    block::MAX_BLOCK_SIZE,
     mantle::{
         TxHash,
         channel::{Channels, Error},
@@ -9,13 +10,19 @@ use crate::{
         ops::channel::ChannelId,
     },
     sdp::locked_notes::LockedNotes,
+    utils::bounded::BoundedBytes,
 };
+
+/// Maximum size in bytes of `DepositOp` metadata on the wire.
+pub const DEPOSIT_METADATA_MAX_BYTES: usize = MAX_BLOCK_SIZE;
+
+pub type DepositMetadata = BoundedBytes<DEPOSIT_METADATA_MAX_BYTES>;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct DepositOp {
     pub channel_id: ChannelId,
     pub inputs: Inputs,
-    pub metadata: Vec<u8>,
+    pub metadata: DepositMetadata,
 }
 
 pub struct DepositValidationContext<'a> {

@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use lb_core::{
     mantle::{Note, Utxo, Value as NoteValue, ops::sdp::SDPDeclareOp},
-    sdp::{Locator, ServiceType},
+    sdp::{DeclarationLocators, ServiceType},
 };
 use lb_key_management_system_keys::keys::{Ed25519PublicKey, ZkPublicKey};
 use serde::Deserialize;
@@ -22,7 +22,7 @@ pub struct StakeHolderInfo {
 pub struct ProviderInfo {
     pub provider_id: Ed25519PublicKey,
     pub zk_id: ZkPublicKey,
-    pub locators: Vec<Locator>,
+    pub locators: DeclarationLocators,
     pub service_type: ServiceType,
 }
 

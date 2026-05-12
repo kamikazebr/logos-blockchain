@@ -2,15 +2,25 @@ use lb_key_management_system_keys::keys::Ed25519Signature;
 use serde::{Deserialize, Serialize};
 
 use super::{ChannelId, Ed25519PublicKey, MsgId};
-use crate::mantle::{
-    TxHash,
-    channel::{ChannelState, Channels, DEFAULT_WITHDRAW_THRESHOLD, Error},
-    ledger::Operation,
+use crate::{
+    mantle::{
+        TxHash,
+        channel::{ChannelState, Channels, DEFAULT_WITHDRAW_THRESHOLD, Error},
+        ledger::Operation,
+    },
+    utils::bounded::BoundedVec,
 };
+
+/// Maximum number of keys in a `SetKeysOp`. Bounded by the wire-format `u8`
+/// count prefix.
+pub const SET_KEYS_MAX_KEYS: usize = u8::MAX as usize;
+
+pub type SetKeysKeys = BoundedVec<Ed25519PublicKey, SET_KEYS_MAX_KEYS>;
+
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct SetKeysOp {
     pub channel: ChannelId,
-    pub keys: Vec<Ed25519PublicKey>,
+    pub keys: SetKeysKeys,
 }
 
 pub struct SetKeysValidationContext<'a> {
@@ -53,13 +63,13 @@ impl Operation<SetKeysValidationContext<'_>> for SetKeysOp {
     ) -> Result<Self::ExecutionContext<'_>, Self::Error> {
         // if the channel doesn't exist, create it other just change the keys
         if let Some(channel) = channels.channels.get_mut(&self.channel) {
-            channel.keys = self.keys.clone().into();
+            channel.keys = self.keys.as_slice().to_vec().into();
         } else {
             channels.channels = channels.channels.insert(
                 self.channel,
                 ChannelState {
                     tip: MsgId::root(),
-                    keys: self.keys.clone().into(),
+                    keys: self.keys.as_slice().to_vec().into(),
                     balance: 0,
                     // TODO: Replace with `ChannelConfig.withdraw_threshold`
                     // once this op is replaced with CHANNEL_CONFIG op: https://github.com/logos-blockchain/logos-blockchain/issues/2461

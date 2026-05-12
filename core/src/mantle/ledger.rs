@@ -33,6 +33,11 @@ pub type Declarations = rpds::RedBlackTreeMapSync<DeclarationId, Declaration>;
 
 pub type Value = u64;
 
+/// Wire-format upper bound on the number of inputs / outputs / ops carried in
+/// a single transaction or operation (the encoded length prefix is a single
+/// byte).
+pub const MAX_INPUTS_OUTPUTS: usize = u8::MAX as usize;
+
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum InputsError {
     #[error("Note: {0:?} isn't in the ledger")]
@@ -43,6 +48,8 @@ pub enum InputsError {
     DoubleSpend,
     #[error("Sum of input values overflows")]
     InputsOverflow,
+    #[error("Too many inputs: got {actual}, maximum allowed is {max}")]
+    TooMany { actual: usize, max: usize },
 }
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
@@ -51,6 +58,8 @@ pub enum OutputsError {
     ZeroValueNote,
     #[error("Sum of output values overflows")]
     OutputsOverflow,
+    #[error("Too many outputs: got {actual}, maximum allowed is {max}")]
+    TooMany { actual: usize, max: usize },
 }
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
@@ -65,9 +74,15 @@ pub enum LedgerError {
 pub struct Outputs(Vec<Note>);
 
 impl Outputs {
-    /// Construct `Outputs` after enforcing the structural invariant that no
-    /// note has zero value.
+    /// Construct `Outputs` after enforcing the structural invariants that no
+    /// note has zero value and the count fits in the wire format.
     pub fn new(notes: Vec<Note>) -> Result<Self, OutputsError> {
+        if notes.len() > MAX_INPUTS_OUTPUTS {
+            return Err(OutputsError::TooMany {
+                actual: notes.len(),
+                max: MAX_INPUTS_OUTPUTS,
+            });
+        }
         for note in &notes {
             if note.value == 0 {
                 return Err(OutputsError::ZeroValueNote);
@@ -158,9 +173,16 @@ impl<'output> IntoIterator for &'output Outputs {
 pub struct Inputs(Vec<NoteId>);
 
 impl Inputs {
-    /// Construct `Inputs` after enforcing the structural invariant that no
-    /// `NoteId` appears more than once (no in-tx double spend).
+    /// Construct `Inputs` after enforcing the structural invariants that no
+    /// `NoteId` appears more than once (no in-tx double spend) and that the
+    /// count fits in the wire format.
     pub fn new(note_ids: Vec<NoteId>) -> Result<Self, InputsError> {
+        if note_ids.len() > MAX_INPUTS_OUTPUTS {
+            return Err(InputsError::TooMany {
+                actual: note_ids.len(),
+                max: MAX_INPUTS_OUTPUTS,
+            });
+        }
         let unique: HashSet<_> = note_ids.iter().collect();
         if unique.len() != note_ids.len() {
             return Err(InputsError::DoubleSpend);

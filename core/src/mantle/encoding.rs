@@ -18,8 +18,10 @@ use crate::{
         ops::{
             Op, OpProof,
             channel::{
-                ChannelId, Ed25519PublicKey, MsgId, deposit::DepositOp, inscribe::InscriptionOp,
-                set_keys::SetKeysOp,
+                ChannelId, Ed25519PublicKey, MsgId,
+                deposit::{DEPOSIT_METADATA_MAX_BYTES, DepositMetadata, DepositOp},
+                inscribe::{INSCRIPTION_MAX_BYTES, InscriptionBytes, InscriptionOp},
+                set_keys::{SetKeysKeys, SetKeysOp},
             },
             leader_claim::{LeaderClaimOp, RewardsRoot, VoucherNullifier},
             sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
@@ -27,7 +29,7 @@ use crate::{
         },
     },
     proofs::leader_claim_proof::Groth16LeaderClaimProof,
-    sdp::{ActivityMetadata, DeclarationId, Locator, ProviderId, ServiceType},
+    sdp::{ActivityMetadata, DeclarationId, DeclarationLocators, Locator, ProviderId, ServiceType},
 };
 
 // ==============================================================================
@@ -41,9 +43,6 @@ use crate::{
 // limits maximum transaction size to 1MiB, for memory safety limits we can
 // allow 4MiB.
 
-/// Maximum memory allocation size allowed for channel inscription data .
-/// Protects against unbounded allocation in `decode_channel_inscribe`
-pub const MAX_ENCODE_DECODE_INSCRIPTION_SIZE: u32 = (MAX_BLOCK_SIZE * 7 / 8) as u32;
 // Maximum memory allocation size allowed for SDP activity metadata.
 // Protects against unbounded allocation in `decode_sdp_active`
 const MAX_ENCODE_DECODE_METADATA_SIZE: u32 = 234; // `ActiveMessage` has a fixed size of 234 bytes
@@ -113,13 +112,16 @@ fn decode_channel_inscribe(input: &[u8]) -> IResult<&[u8], InscriptionOp> {
     let (input, channel_id) = map(decode_hash32, ChannelId::from).parse(input)?;
     let (input, inscription_len) = decode_uint32(input)?;
 
-    // Validate inscription length to prevent unbounded memory allocation
-    if inscription_len > MAX_ENCODE_DECODE_INSCRIPTION_SIZE {
+    // Reject length before allocating. The `InscriptionBytes::new` check below
+    // would also catch it, but only after a potential multi-gigabyte alloc.
+    if (inscription_len as usize) > INSCRIPTION_MAX_BYTES {
         return Err(nom::Err::Error(Error::new(input, ErrorKind::TooLarge)));
     }
 
-    let (input, inscription) =
+    let (input, inscription_bytes) =
         map(take(inscription_len as usize), |b: &[u8]| b.to_vec()).parse(input)?;
+    let inscription = InscriptionBytes::new(inscription_bytes)
+        .map_err(|_| nom::Err::Error(Error::new(input, ErrorKind::Verify)))?;
     let (input, parent) = map(decode_hash32, MsgId::from).parse(input)?;
     let (input, signer) = decode_ed25519_public_key(input)?;
 
@@ -139,7 +141,9 @@ fn decode_channel_set_keys(input: &[u8]) -> IResult<&[u8], SetKeysOp> {
     let (input, channel) = map(decode_hash32, ChannelId::from).parse(input)?;
     let (input, key_count) = decode_byte(input)?;
 
-    let (input, keys) = count(decode_ed25519_public_key, key_count as usize).parse(input)?;
+    let (input, keys_vec) = count(decode_ed25519_public_key, key_count as usize).parse(input)?;
+    // `keys_vec.len()` is at most `u8::MAX`, which equals the type's cap.
+    let keys = SetKeysKeys::new_unchecked(keys_vec);
 
     Ok((input, SetKeysOp { channel, keys }))
 }
@@ -149,8 +153,16 @@ fn decode_channel_deposit(input: &[u8]) -> IResult<&[u8], DepositOp> {
     let (input, channel_id) = map(decode_hash32, ChannelId::from).parse(input)?;
     let (input, inputs) = decode_inputs(input)?;
     let (input, metadata_len) = decode_uint32(input)?;
-    let (input, metadata) =
+
+    // Reject length before allocating.
+    if (metadata_len as usize) > DEPOSIT_METADATA_MAX_BYTES {
+        return Err(nom::Err::Error(Error::new(input, ErrorKind::TooLarge)));
+    }
+
+    let (input, metadata_bytes) =
         map(take(metadata_len as usize), |bytes: &[u8]| bytes.to_vec()).parse(input)?;
+    let metadata = DepositMetadata::new(metadata_bytes)
+        .map_err(|_| nom::Err::Error(Error::new(input, ErrorKind::Verify)))?;
 
     Ok((
         input,
@@ -186,7 +198,9 @@ fn decode_sdp_declare(input: &[u8]) -> IResult<&[u8], SDPDeclareOp> {
     let (input, service_type) = map_res(decode_byte, ServiceType::try_from).parse(input)?;
     let (input, locator_count) = decode_byte(input)?;
 
-    let (input, locators) = count(decode_locator, locator_count as usize).parse(input)?;
+    let (input, locators_vec) = count(decode_locator, locator_count as usize).parse(input)?;
+    let locators = DeclarationLocators::new(locators_vec)
+        .map_err(|_| nom::Err::Error(Error::new(input, ErrorKind::Verify)))?;
     let (input, provider_key) = decode_ed25519_public_key(input)?;
     let provider_id = ProviderId(provider_key);
     let (input, zk_fr) = decode_field_element(input)?;
@@ -531,7 +545,6 @@ use lb_groth16::fr_to_bytes;
 
 use super::ops::opcode;
 use crate::{
-    block::MAX_BLOCK_SIZE,
     mantle::{
         ledger::{Inputs, Outputs},
         ops::channel::{ChannelKeyIndex, withdraw::ChannelWithdrawOp},
@@ -617,26 +630,14 @@ fn encode_channel_withdraw_proof(proof: &ChannelWithdrawProof) -> Vec<u8> {
 pub fn encode_channel_inscribe(op: &InscriptionOp) -> Vec<u8> {
     let mut bytes = Vec::new();
     bytes.extend(encode_hash32(op.channel_id.as_ref()));
-    assert!(
-        op.inscription.len() <= MAX_ENCODE_DECODE_INSCRIPTION_SIZE as usize,
-        "Fatal error in 'encode_channel_inscribe' - {} inscription data clipped to {}",
-        op.inscription.len(),
-        MAX_ENCODE_DECODE_INSCRIPTION_SIZE
-    );
     bytes.extend(encode_uint32(op.inscription.len() as u32));
-    bytes.extend(&op.inscription);
+    bytes.extend(op.inscription.as_slice());
     bytes.extend(encode_hash32(op.parent.as_ref()));
     bytes.extend(encode_ed25519_public_key(&op.signer));
     bytes
 }
 
 fn encode_channel_set_keys(op: &SetKeysOp) -> Vec<u8> {
-    assert!(
-        u8::try_from(op.keys.len()).is_ok(),
-        "Fatal error in 'encode_channel_set_keys' - {} keys clipped to {}",
-        op.keys.len(),
-        u8::MAX
-    );
     let mut bytes = Vec::new();
     bytes.extend(encode_hash32(op.channel.as_ref()));
     bytes.extend(encode_byte(op.keys.len() as u8));
@@ -654,6 +655,8 @@ fn encode_channel_deposit(op: &DepositOp) -> Vec<u8> {
     bytes.extend(op.metadata.as_slice());
     bytes
 }
+
+
 
 #[must_use]
 pub fn encode_channel_withdraw(op: &ChannelWithdrawOp) -> Vec<u8> {
@@ -680,12 +683,6 @@ fn encode_locator(locator: &Multiaddr) -> Vec<u8> {
 }
 
 fn encode_sdp_declare(op: &SDPDeclareOp) -> Vec<u8> {
-    assert!(
-        u8::try_from(op.locators.len()).is_ok(),
-        "Fatal error in 'encode_sdp_declare' - {} locators clipped to {}",
-        op.locators.len(),
-        u8::MAX
-    );
     let mut bytes = Vec::new();
     // ServiceType
     bytes.extend(encode_byte(op.service_type.into()));
@@ -750,12 +747,6 @@ fn encode_note(note: &Note) -> Vec<u8> {
 }
 
 fn encode_inputs(inputs: &[NoteId]) -> Vec<u8> {
-    assert!(
-        u8::try_from(inputs.len()).is_ok(),
-        "Fatal error in 'encode_inputs' - {} inputs clipped to {}",
-        inputs.len(),
-        u8::MAX
-    );
     let mut bytes = Vec::new();
     bytes.extend(encode_byte(inputs.len() as u8));
     for input in inputs {
@@ -766,12 +757,6 @@ fn encode_inputs(inputs: &[NoteId]) -> Vec<u8> {
 
 fn encode_outputs(outputs: &[Note]) -> Vec<u8> {
     let mut bytes = Vec::new();
-    assert!(
-        u8::try_from(outputs.len()).is_ok(),
-        "Fatal error in 'encode_outputs' - {} outputs clipped to {}",
-        outputs.len(),
-        u8::MAX
-    );
     bytes.extend(encode_byte(outputs.len() as u8));
     for output in outputs {
         bytes.extend(encode_note(output));

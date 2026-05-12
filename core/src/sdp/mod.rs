@@ -14,8 +14,13 @@ use strum::EnumIter;
 use crate::{
     block::BlockNumber,
     mantle::{NoteId, ops::channel::Ed25519PublicKey},
-    utils::{display_hex_bytes_newtype, serde_bytes_newtype},
+    utils::{bounded::BoundedVec, display_hex_bytes_newtype, serde_bytes_newtype},
 };
+
+/// Maximum number of locators in a service declaration.
+pub const MAX_DECLARATION_LOCATORS: usize = 8;
+
+pub type DeclarationLocators = BoundedVec<Locator, MAX_DECLARATION_LOCATORS>;
 
 pub type SessionNumber = u64;
 pub type StakeThreshold = u64;
@@ -190,7 +195,7 @@ pub struct Declaration {
     pub service_type: ServiceType,
     pub provider_id: ProviderId,
     pub locked_note_id: NoteId,
-    pub locators: Vec<Locator>,
+    pub locators: DeclarationLocators,
     pub zk_id: ZkPublicKey,
     pub created: BlockNumber,
     pub active: BlockNumber,
@@ -200,7 +205,7 @@ pub struct Declaration {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProviderInfo {
-    pub locators: Vec<Locator>,
+    pub locators: DeclarationLocators,
     pub zk_id: ZkPublicKey,
 }
 
@@ -224,7 +229,7 @@ impl Declaration {
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct DeclarationMessage {
     pub service_type: ServiceType,
-    pub locators: Vec<Locator>,
+    pub locators: DeclarationLocators,
     pub provider_id: ProviderId,
     pub zk_id: ZkPublicKey,
     pub locked_note_id: NoteId,

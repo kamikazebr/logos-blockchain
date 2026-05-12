@@ -2,11 +2,11 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use lb_key_management_system_keys::keys::Ed25519Signature;
-use lb_utils::serde::serde_bytes_vec;
 use serde::{Deserialize, Serialize};
 
 use super::{ChannelId, Ed25519PublicKey, MsgId};
 use crate::{
+    block::MAX_BLOCK_SIZE,
     crypto::{Digest as _, Hasher},
     mantle::{
         TxHash,
@@ -14,14 +14,19 @@ use crate::{
         encoding::encode_channel_inscribe,
         ledger::Operation,
     },
+    utils::bounded::BoundedBytes,
 };
+
+/// Maximum size in bytes of an inscription payload on the wire.
+pub const INSCRIPTION_MAX_BYTES: usize = (MAX_BLOCK_SIZE * 7) / 8;
+
+pub type InscriptionBytes = BoundedBytes<INSCRIPTION_MAX_BYTES>;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct InscriptionOp {
     pub channel_id: ChannelId,
     /// Message to be written in the blockchain
-    #[serde(with = "serde_bytes_vec")]
-    pub inscription: Vec<u8>,
+    pub inscription: InscriptionBytes,
     /// Enforce that this inscription comes after this tx
     pub parent: MsgId,
     pub signer: Ed25519PublicKey,
@@ -134,7 +139,7 @@ mod tests {
     fn sample() -> InscriptionOp {
         InscriptionOp {
             channel_id: ChannelId([0u8; 32]),
-            inscription: b"genesis".to_vec(),
+            inscription: InscriptionBytes::new_unchecked(b"genesis".to_vec()),
             parent: MsgId([0u8; 32]),
             signer: Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
         }

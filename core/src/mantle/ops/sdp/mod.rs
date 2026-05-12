@@ -16,7 +16,7 @@ pub type SDPDeclareOp = crate::sdp::DeclarationMessage;
 pub type SDPWithdrawOp = crate::sdp::WithdrawMessage;
 pub type SDPActiveOp = crate::sdp::ActiveMessage;
 
-pub(crate) const MAX_DECLARATION_LOCATOR: usize = 8;
+use crate::sdp::MAX_DECLARATION_LOCATORS;
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum SdpError {
@@ -28,7 +28,7 @@ pub enum SdpError {
     InvalidEddsaSignature,
     #[error("Duplicate sdp declaration id: {0:?}")]
     DuplicateDeclaration(DeclarationId),
-    #[error("Sdp declaration has more than {MAX_DECLARATION_LOCATOR:?} locators")]
+    #[error("Sdp declaration has more than {MAX_DECLARATION_LOCATORS:?} locators")]
     TooMuchLocators,
     #[error("Note {note_id:?} insufficient value: {value}")]
     NoteInsufficientValue { note_id: NoteId, value: u64 },

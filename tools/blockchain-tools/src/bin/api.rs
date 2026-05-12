@@ -5,7 +5,7 @@ use clap::{Parser, Subcommand};
 use lb_common_http_client::{BasicAuthCredentials, CommonHttpClient};
 use lb_core::{
     mantle::NoteId,
-    sdp::{DeclarationMessage, Locator, ProviderId, ServiceType},
+    sdp::{DeclarationLocators, DeclarationMessage, Locator, ProviderId, ServiceType},
 };
 use lb_http_api_common::bodies::wallet::balance::WalletBalanceResponseBody;
 use lb_key_management_system_keys::keys::ZkPublicKey;
@@ -159,7 +159,7 @@ async fn post_blend_declaration(
     .with_context(|| "Failed to extract necessary values from user config")?;
 
     let declaration = DeclarationMessage {
-        locators: vec![locator],
+        locators: DeclarationLocators::new_unchecked(vec![locator]),
         locked_note_id,
         provider_id,
         service_type: ServiceType::BlendNetwork,
