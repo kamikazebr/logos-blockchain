@@ -656,8 +656,6 @@ fn encode_channel_deposit(op: &DepositOp) -> Vec<u8> {
     bytes
 }
 
-
-
 #[must_use]
 pub fn encode_channel_withdraw(op: &ChannelWithdrawOp) -> Vec<u8> {
     let mut bytes = Vec::new();
@@ -930,9 +928,12 @@ mod tests {
 
     use super::*;
     use crate::{
+        block::MAX_BLOCK_SIZE,
         mantle::{Transaction as _, tx::GasPrices},
         sdp::blend::ActivityProof,
     };
+
+    const MAX_ENCODE_DECODE_INSCRIPTION_SIZE: u32 = (MAX_BLOCK_SIZE * 7 / 8) as u32;
 
     fn dbg_test_vector(actual: &str, expected: &str) {
         println!("{:32} {:32}", "actual", "expected");
@@ -1035,7 +1036,7 @@ mod tests {
         let signing_key = Ed25519Key::from_bytes(&[4u8; 32]);
         let mantle_tx = MantleTx(vec![Op::ChannelInscribe(InscriptionOp {
             channel_id: ChannelId::from([0xAA; 32]),
-            inscription: b"hello".to_vec(),
+            inscription: b"hello".to_vec().try_into().unwrap(),
             parent: MsgId::from([0xBB; 32]),
             signer: signing_key.public_key(),
         })]);
@@ -1079,7 +1080,7 @@ mod tests {
         let mantle_tx = MantleTx(vec![
             Op::ChannelInscribe(InscriptionOp {
                 channel_id: ChannelId::from([0x11; 32]),
-                inscription: b"first".to_vec(),
+                inscription: b"first".to_vec().try_into().unwrap(),
                 parent: MsgId::from([0x00; 32]),
                 signer: signing_key.public_key(),
             }),
@@ -1109,7 +1110,7 @@ mod tests {
     #[tokio::test]
     async fn test_large_payload_encoding_decoding() {
         // Test payload sizes from 512kB up to 2MiB in 512kB increments
-        const MAX_SIZE: usize = MAX_ENCODE_DECODE_INSCRIPTION_SIZE as usize;
+        const MAX_SIZE: usize = 2_000_000;
         const CHUNK_SIZE: usize = MAX_SIZE / 10;
 
         let signing_key = Ed25519Key::from_bytes(&[1; 32]);
@@ -1120,7 +1121,7 @@ mod tests {
             let signing_key = signing_key.clone();
 
             let task = tokio::task::spawn(async move {
-                let large_inscription = vec![0xAB; payload_size];
+                let large_inscription = InscriptionBytes::new_unchecked(vec![0xAB; payload_size]);
 
                 let inscribe_op = InscriptionOp {
                     channel_id: ChannelId::from([0xAA; 32]),
