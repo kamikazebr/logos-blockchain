@@ -6,6 +6,7 @@ use lb_core::sdp::ServiceParameters;
 use lb_cryptarchia_engine::EpochConfig;
 use lb_ledger::mantle::sdp::{ServiceRewardsParameters, rewards::blend::RewardsParameters};
 use lb_libp2p::PeerId;
+use lb_utils::math::NonNegativeRatio;
 
 use crate::config::{
     cryptarchia::{deployment::Settings as DeploymentSettings, serde::Config},
@@ -27,7 +28,7 @@ impl ServiceConfig {
         reason = "Conversion. Useful to have in a single place."
     )]
     pub fn into_cryptarchia_services_settings(
-        self,
+        mut self,
         blend_rewards_params: RewardsParameters,
         state_config: &StateConfig,
     ) -> (
@@ -35,7 +36,19 @@ impl ServiceConfig {
         lb_chain_network_service::ChainNetworkSettings<PeerId, LibP2pAdapterSettings>,
         lb_chain_leader_service::LeaderSettings<(), Libp2pBroadcastSettings>,
     ) {
+        self.deployment.security_param = 5.try_into().unwrap();
+        self.deployment.slot_activation_coeff = NonNegativeRatio::new(1, 10.try_into().unwrap());
+        self.deployment.epoch_config.epoch_period_nonce_buffer = 2.try_into().unwrap();
+        self.deployment
+            .epoch_config
+            .epoch_period_nonce_stabilization = 2.try_into().unwrap();
+        self.deployment
+            .epoch_config
+            .epoch_stake_distribution_stabilization = 2.try_into().unwrap();
+        self.deployment.learning_rate = 0.1.try_into().unwrap();
+
         let blocks_per_session = self.deployment.blocks_per_epoch();
+        println!("Blocks per session (epoch): {blocks_per_session}");
 
         let ledger_config = lb_ledger::Config {
             consensus_config: self.deployment.consensus_config(),

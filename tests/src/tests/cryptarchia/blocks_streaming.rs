@@ -40,9 +40,20 @@ impl CanonicalChain {
     }
 }
 
-async fn spawn_two_validators(test_name: &str) -> [Validator; 2] {
-    let (configs, genesis_block) = create_general_configs(2, Some(test_name));
-    let deployment_settings = e2e_deployment_settings_with_genesis_block(&genesis_block);
+async fn spawn_two_validators(test_name: &str) -> [Validator; 5] {
+    let (configs, genesis_block) = create_general_configs(5, Some(test_name));
+    let deployment_settings = {
+        let mut settings = e2e_deployment_settings_with_genesis_block(&genesis_block);
+        settings.blend.common.num_blend_layers = 1.try_into().unwrap();
+        settings
+            .blend
+            .core
+            .scheduler
+            .delayer
+            .maximum_release_delay_in_rounds = 1.try_into().unwrap();
+
+        settings
+    };
 
     let configs = configs
         .into_iter()
@@ -67,13 +78,19 @@ async fn spawn_two_validators(test_name: &str) -> [Validator; 2] {
         .unwrap();
 
     let mut iter = nodes.into_iter();
-    [iter.next().unwrap(), iter.next().unwrap()]
+    [
+        iter.next().unwrap(),
+        iter.next().unwrap(),
+        iter.next().unwrap(),
+        iter.next().unwrap(),
+        iter.next().unwrap(),
+    ]
 }
 
-async fn wait_for_lib_and_tip(nodes: &[Validator; 2]) -> lb_chain_service::CryptarchiaInfo {
+async fn wait_for_lib_and_tip(nodes: &[Validator; 5]) -> lb_chain_service::CryptarchiaInfo {
     let config = nodes[0].config();
 
-    let min_height = config.deployment.cryptarchia.security_param.get() * 2 - 1;
+    let min_height = 1_000_000;
     let timeout = max_block_propagation_time(
         min_height * CHAIN_LENGTH_MULTIPLIER,
         nodes.len().try_into().unwrap(),
@@ -83,7 +100,7 @@ async fn wait_for_lib_and_tip(nodes: &[Validator; 2]) -> lb_chain_service::Crypt
     println!(
         "waiting for canonical chain with height >= {min_height}, lib height >= 3 and tip at least 2 above LIB: timeout:{timeout:?}",
     );
-    let timeout = tokio::time::sleep(timeout);
+    let timeout = tokio::time::sleep(Duration::from_hours(2));
     let mut tick: u32 = 0;
     tokio::select! {
         () = timeout => panic!("timed out waiting for 'lib_slot >= 1 && tip_slot > lib_slot'"),
@@ -190,7 +207,7 @@ async fn canonical_chain(
     }
 }
 
-async fn setup_nodes_and_chain(test_name: &str) -> ([Validator; 2], CanonicalChain) {
+async fn setup_nodes_and_chain(test_name: &str) -> ([Validator; 5], CanonicalChain) {
     let nodes = spawn_two_validators(test_name).await;
     let final_info = wait_for_lib_and_tip(&nodes).await;
     let chain = canonical_chain(&nodes[0], &final_info).await;
