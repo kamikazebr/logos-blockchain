@@ -218,6 +218,12 @@ impl<R: Rewards> ServiceState<R> {
         let current_session = service_params.session_for_block(block_number);
         let reward_utxos;
 
+        // Always collect the epoch first so the current session's tracker sees
+        // every epoch that appears in an applied block, including the one on a
+        // session-boundary block whose epoch may differ from all previously
+        // seen epochs in this session.
+        self.rewards = self.rewards.update_epoch(epoch_state, rewards_params);
+
         // shift all session!
         if current_session == self.active.session_n + 1 {
             // Remove expired declarations based on retention_period
@@ -259,7 +265,6 @@ impl<R: Rewards> ServiceState<R> {
                 "Logos blockchain isn't ready for time travel yet: session_of_block={current_session}, active_session={}",
                 self.active.session_n
             );
-            self.rewards = self.rewards.update_epoch(epoch_state, rewards_params);
             reward_utxos = Vec::new();
         }
 
