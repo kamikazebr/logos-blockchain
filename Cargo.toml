@@ -419,7 +419,6 @@ deref_into_dyn_supertrait     = { level = "warn" }
 ffi_unwind_calls              = { level = "warn" }
 impl_trait_redundant_captures = { level = "warn" }
 let_underscore_drop           = { level = "warn" }
-linker_messages               = { level = "warn" }
 macro_use_extern_crate        = { level = "warn" }
 missing_unsafe_on_extern      = { level = "warn" }
 redundant_imports             = { level = "warn" }
