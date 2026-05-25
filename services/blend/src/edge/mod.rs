@@ -19,7 +19,7 @@ use lb_blend::{
     proofs::quota::inputs::prove::public::{CoreInputs, LeaderInputs},
     scheduling::{
         message_blend::provers::leader::LeaderProofsGenerator,
-        session::{SessionEvent, UninitializedSessionEventStream},
+        session::{SessionEvent, UninitializedEpochEventStream},
     },
 };
 use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
@@ -288,7 +288,7 @@ where
         .await;
 
         run::<Backend, _, ProofsGenerator, _, PolInfoProvider, _>(
-            UninitializedSessionEventStream::new(
+            UninitializedEpochEventStream::new(
                 session_stream,
                 settings.time.session_transition_period(),
             ),
@@ -345,7 +345,7 @@ where
     reason = "TODO: address this in a dedicated refactor"
 )]
 async fn run<Backend, NodeId, ProofsGenerator, ChainService, PolInfoProvider, RuntimeServiceId>(
-    session_stream: UninitializedSessionEventStream<
+    session_stream: UninitializedEpochEventStream<
         impl Stream<Item = MembershipInfo<NodeId>> + Unpin,
     >,
     mut clock_stream: impl Stream<Item = SlotTick> + Unpin,

@@ -1,12 +1,16 @@
 use core::{
     fmt::{Debug, Display},
     hash::Hash,
+    time::Duration,
 };
 
 use futures::{Stream, StreamExt as _};
 use lb_blend::{
     crypto::merkle::sort_nodes_and_build_merkle_tree,
-    scheduling::membership::{Membership, Node},
+    scheduling::{
+        membership::{Membership, Node},
+        stream::UninitializedFirstReadyStream,
+    },
 };
 use lb_chain_service::{
     Epoch,
@@ -22,7 +26,7 @@ use lb_ledger::{EpochState, UtxoTree};
 use lb_log_targets::blend;
 use lb_time_service::{SlotTick, TimeService, TimeServiceMessage, backends::TimeBackend};
 use overwatch::{overwatch::OverwatchHandle, services::AsServiceId};
-use tokio::sync::oneshot;
+use tokio::{sync::oneshot, time::sleep};
 use tracing::{debug, warn};
 
 use crate::membership::{MembershipInfo, ZkInfo, node_id};
@@ -78,6 +82,40 @@ where
             membership: membership_info,
         }
     }))
+}
+
+pub enum EpochMembershipEvent<NodeId> {
+    /// A new epoch has started, carrying its membership state.
+    NewEpoch(BlendMembershipEpochState<NodeId>),
+    /// The transition period of the previous epoch has elapsed and its state
+    /// can be safely discarded.
+    PreviousEpochTransitionExpired,
+}
+
+pub fn add_epoch_transitions<NodeId, MembershipStream>(
+    membership_stream: MembershipStream,
+    transition_period: Duration,
+) -> impl Stream<Item = EpochMembershipEvent<NodeId>>
+where
+    MembershipStream: Stream<Item = BlendMembershipEpochState<NodeId>> + Unpin,
+{
+    futures::stream::unfold(
+        (membership_stream, false, false),
+        move |(mut memberships, expired_pending, has_previous)| async move {
+            if expired_pending {
+                sleep(transition_period).await;
+                return Some((
+                    EpochMembershipEvent::PreviousEpochTransitionExpired,
+                    (memberships, false, has_previous),
+                ));
+            }
+            let membership = memberships.next().await?;
+            Some((
+                EpochMembershipEvent::NewEpoch(membership),
+                (memberships, has_previous, true),
+            ))
+        },
+    )
 }
 
 /// Subscribes to the slot clock and yields the [`EpochState`] once per epoch,
@@ -240,4 +278,163 @@ where
 struct ZkNode<NodeId> {
     pub node: Node<NodeId>,
     pub zk_key: ZkPublicKey,
+}
+
+/// A staging type that initializes a [`SessionEventStream`] by consuming
+/// the first [`Session`] from the underlying stream, expected to be yielded
+/// within a short timeout.
+pub struct UninitializedEpochEventStream<Stream> {
+    stream: UninitializedFirstReadyStream<Stream>,
+    transition_period: Duration,
+}
+
+impl<Stream> UninitializedEpochEventStream<Stream> {
+    #[must_use]
+    pub const fn new(epoch_stream: Stream, transition_period: Duration) -> Self {
+        Self {
+            stream: UninitializedFirstReadyStream::new(epoch_stream),
+            transition_period,
+        }
+    }
+}
+
+impl<Stream, Epoch> UninitializedEpochEventStream<Stream>
+where
+    Stream: futures::Stream<Item = Epoch> + Unpin,
+{
+    /// Initializes a [`EpochEventStream`] by consuming the first [`Epoch`]
+    /// from the underlying stream.
+    ///
+    /// It returns the first [`Epoch`] and the initialized
+    /// [`EpochEventStream`], awaiting the first epoch for as long as
+    /// necessary.
+    /// It returns an error only if the underlying stream closes before yielding
+    /// an epoch.
+    pub async fn await_first_ready(
+        self,
+    ) -> Result<(Epoch, EpochEventStream<Stream>), FirstReadyStreamError> {
+        let (first_epoch, remaining_stream) = self.stream.first().await?;
+        Ok((
+            first_epoch,
+            EpochEventStream::new(remaining_stream, self.transition_period),
+        ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use futures::StreamExt as _;
+    use tokio::time::{Instant, interval};
+    use tokio_stream::wrappers::IntervalStream;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn yield_two_events_alternately() {
+        let session_duration = Duration::from_secs(1);
+        let transition_period = Duration::from_millis(200);
+        let time_tolerance = Duration::from_millis(100);
+
+        let mut stream = SessionEventStream::new(
+            Box::pin(IntervalStream::new(interval(session_duration))),
+            transition_period,
+        );
+
+        // NewSession should be emitted immediately.
+        let start_time = Instant::now();
+        assert!(matches!(
+            stream.next().await,
+            Some(SessionEvent::NewSession(_))
+        ));
+        let elapsed = start_time.elapsed();
+        let tolerance = Duration::from_millis(50);
+        assert!(elapsed <= tolerance, "elapsed:{elapsed:?}");
+
+        // TransitionEnd should be emitted after transition_period.
+        let start_time = Instant::now();
+        assert!(matches!(
+            stream.next().await,
+            Some(SessionEvent::TransitionPeriodExpired)
+        ));
+        let elapsed = start_time.elapsed();
+        assert!(
+            elapsed.abs_diff(transition_period) <= time_tolerance,
+            "elapsed:{elapsed:?}, expected:{transition_period:?}",
+        );
+
+        // NewSession should be emitted after session_duration - transition_period.
+        let start_time = Instant::now();
+        assert!(matches!(
+            stream.next().await,
+            Some(SessionEvent::NewSession(_))
+        ));
+        let elapsed = start_time.elapsed();
+        assert!(
+            elapsed.abs_diff(session_duration.checked_sub(transition_period).unwrap())
+                <= time_tolerance,
+            "elapsed:{elapsed:?}, expected:{:?}",
+            session_duration.checked_sub(transition_period).unwrap()
+        );
+
+        // TransitionEnd should be emitted after transition_period.
+        let start_time = Instant::now();
+        assert!(matches!(
+            stream.next().await,
+            Some(SessionEvent::TransitionPeriodExpired)
+        ));
+        let elapsed = start_time.elapsed();
+        assert!(
+            elapsed.abs_diff(transition_period) <= time_tolerance,
+            "elapsed:{elapsed:?}, expected:{transition_period:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn transition_period_shorter_than_session() {
+        let session_duration = Duration::from_millis(500);
+        let transition_period = Duration::from_millis(600);
+        let time_tolerance = Duration::from_millis(50);
+
+        let mut stream = SessionEventStream::new(
+            Box::pin(IntervalStream::new(interval(session_duration))),
+            transition_period,
+        );
+
+        // NewSession should be emitted immediately.
+        let start_time = Instant::now();
+        assert!(matches!(
+            stream.next().await,
+            Some(SessionEvent::NewSession(_))
+        ));
+        let elapsed = start_time.elapsed();
+        assert!(elapsed <= time_tolerance, "elapsed:{elapsed:?}");
+
+        // NewSession should be emitted again after session_duration.
+        let start_time = Instant::now();
+        assert!(matches!(
+            stream.next().await,
+            Some(SessionEvent::NewSession(_))
+        ));
+        let elapsed = start_time.elapsed();
+        assert!(
+            elapsed.abs_diff(session_duration) <= time_tolerance,
+            "elapsed:{elapsed:?}, expected:{session_duration:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn first_ready_stream_yields_first_item_immediately() {
+        // Use an underlying stream that yields the first item nearly immediately.
+        let stream = UninitializedFirstReadyStream::new(
+            IntervalStream::new(interval(Duration::from_secs(1)))
+                .enumerate()
+                .map(|(i, _)| i),
+        );
+
+        let (first, mut stream) = stream.first().await.expect("first item should be yielded");
+        assert_eq!(first, 0);
+        // Next items are yielded normally.
+        assert_eq!(stream.next().await, Some(1));
+        assert_eq!(stream.next().await, Some(2));
+    }
 }

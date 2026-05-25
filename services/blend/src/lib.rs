@@ -8,7 +8,9 @@ use std::{
 use async_trait::async_trait;
 use futures::StreamExt as _;
 pub use lb_blend::message::{crypto::proofs::RealProofsVerifier, encap::ProofsVerifier};
-use lb_blend::scheduling::session::UninitializedSessionEventStream;
+use lb_blend::scheduling::{
+    session::UninitializedEpochEventStream, stream::UninitializedFirstReadyStream,
+};
 use lb_chain_service::api::CryptarchiaServiceData;
 use lb_key_management_system_service::{api::KmsServiceApi, keys::PublicKeyEncoding};
 use lb_log_targets::blend;
@@ -33,6 +35,10 @@ use crate::{
         },
     },
     edge::service_components::ServiceComponents as EdgeServiceComponents,
+    epoch::public::{
+        BlendMembershipEpochState, EpochMembershipEvent, add_epoch_transitions,
+        get_epoch_membership_stream,
+    },
     instance::{Instance, Mode},
     kms::PreloadKmsService,
     membership::{
@@ -45,7 +51,6 @@ use crate::{
 pub mod core;
 pub mod edge;
 mod epoch;
-pub mod epoch_info;
 pub mod membership;
 pub mod message;
 pub(crate) mod metrics;
@@ -190,34 +195,40 @@ where
             CoreService::NodeId::try_from_provider_id(non_ephemeral_signing_key_public.as_bytes())
                 .expect("non-ephemeral signing public key should decode into a valid node id");
 
-        let membership_stream = membership::chain::subscribe::<
-            <EdgeService as EdgeServiceComponents>::ChainService,
-            CoreService::NodeId,
-            <EdgeService as EdgeServiceComponents>::TimeBackend,
-            RuntimeServiceId,
-        >(
-            overwatch_handle,
-            non_ephemeral_signing_key_public,
-            // We don't need to generate secret zk info in the proxy service, so we ignore the
-            // secret key at this level.
-            None,
-            settings.common.time.epoch_transition_period_in_slots,
-        )
-        .await;
+        let epoch_event_stream = {
+            let epoch_stream =
+                get_epoch_membership_stream::<
+                    <EdgeService as EdgeServiceComponents>::ChainService,
+                    CoreService::NodeId,
+                    <EdgeService as EdgeServiceComponents>::TimeBackend,
+                    RuntimeServiceId,
+                >(overwatch_handle, non_ephemeral_signing_key_public, None)
+                .await
+                .expect("Failed to retrieve epoch membership stream.");
 
-        let (MembershipInfo { membership, .. }, mut remaining_session_stream) =
-            UninitializedSessionEventStream::new(
-                membership_stream,
-                settings.common.time.session_transition_period(),
-            )
-            .await_first_ready()
+            add_epoch_transitions(epoch_stream, settings.common.time.epoch_transition_period)
+        };
+
+        let (
+            EpochMembershipEvent::NewEpoch(BlendMembershipEpochState {
+                membership: MembershipInfo { membership, .. },
+                ..
+            }),
+            mut remaining_epoch_stream,
+        ) = UninitializedFirstReadyStream::new(epoch_event_stream)
+            .first()
             .await
-            .expect("The current session must be ready");
+            .expect("The current epoch must be ready")
+        else {
+            panic!(
+                "The epoch membership stream ended before yielding the first item, but it should yield the current epoch's membership at least."
+            );
+        };
 
         info!(
             target: LOG_TARGET,
             members = membership.size(),
-            "current membership is ready",
+            "current epoch membership is ready",
         );
 
         let mut instance = Instance::<CoreService, EdgeService, RuntimeServiceId>::new(
@@ -236,11 +247,11 @@ where
 
         loop {
             tokio::select! {
-                Some(session_event) = remaining_session_stream.next() => {
-                    debug!(target: LOG_TARGET, ?session_event, "received session event");
+                Some(epoch_event) = remaining_epoch_stream.next() => {
+                    debug!(target: LOG_TARGET, ?epoch_event, "received epoch event");
                     instance = instance
-                        .handle_session_event(
-                            session_event,
+                        .handle_epoch_event(
+                            epoch_event,
                             overwatch_handle,
                             minimal_network_size,
                             local_node_id.clone(),

@@ -18,6 +18,7 @@ use crate::{
             MessageComponents, NetworkBackendOfService, ServiceComponents as CoreServiceComponents,
         },
     },
+    epoch::public::{BlendMembershipEpochState, EpochMembershipEvent},
     membership::MembershipInfo,
     modes::{self, BroadcastMode, CoreMode, EdgeMode},
 };
@@ -140,15 +141,18 @@ where
     }
 
     /// Handles a session event, potentially causing a mode transition.
-    pub async fn handle_session_event(
+    pub async fn handle_epoch_event(
         self,
-        event: SessionEvent<MembershipInfo<CoreService::NodeId>>,
+        event: EpochMembershipEvent<CoreService::NodeId>,
         overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
         minimal_network_size: usize,
         local_node_id: CoreService::NodeId,
     ) -> Result<Self, modes::Error> {
         match event {
-            SessionEvent::NewSession(MembershipInfo { membership, .. }) => {
+            EpochMembershipEvent::NewEpoch(BlendMembershipEpochState {
+                membership: MembershipInfo { membership, .. },
+                ..
+            }) => {
                 self.transition(
                     Mode::choose(&membership, minimal_network_size),
                     overwatch_handle,
@@ -156,7 +160,7 @@ where
                 )
                 .await
             }
-            SessionEvent::TransitionPeriodExpired => {
+            EpochMembershipEvent::PreviousEpochTransitionExpired => {
                 Ok(self.handle_transition_period_expired().await)
             }
         }
@@ -625,7 +629,7 @@ mod tests {
             let local_node = LOCAL_NODE_ID;
             let minimal_network_size = 1;
             let instance = instance
-                .handle_session_event(
+                .handle_epoch_event(
                     // With an empty membership smaller than the minimal size.
                     SessionEvent::NewSession(MembershipInfo::from_membership_and_epoch_number(
                         membership(&[], local_node),
@@ -641,7 +645,7 @@ mod tests {
 
             // BroadcastAfterCore -> Broadcast, after the transition period expires.
             let instance = instance
-                .handle_session_event(
+                .handle_epoch_event(
                     SessionEvent::TransitionPeriodExpired,
                     handle,
                     minimal_network_size,
@@ -653,7 +657,7 @@ mod tests {
 
             // Broadcast -> Edge
             let instance = instance
-                .handle_session_event(
+                .handle_epoch_event(
                     SessionEvent::NewSession(MembershipInfo::from_membership_and_epoch_number(
                         membership(&[1], local_node),
                         1,
@@ -668,7 +672,7 @@ mod tests {
 
             // Edge -> Edge (stay)
             let instance = instance
-                .handle_session_event(
+                .handle_epoch_event(
                     SessionEvent::NewSession(MembershipInfo::from_membership_and_epoch_number(
                         membership(&[1], local_node),
                         1,
@@ -683,7 +687,7 @@ mod tests {
 
             // Edge -> Core
             let instance = instance
-                .handle_session_event(
+                .handle_epoch_event(
                     SessionEvent::NewSession(MembershipInfo::from_membership_and_epoch_number(
                         membership(&[1], 1),
                         1,

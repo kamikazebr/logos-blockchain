@@ -44,7 +44,7 @@ use lb_blend::{
             round_info::{RoundInfo, RoundReleaseType},
             session_info::SessionInfo as SchedulerSessionInfo,
         },
-        session::{SessionEvent, UninitializedSessionEventStream},
+        session::{SessionEvent, UninitializedEpochEventStream},
         stream::UninitializedFirstReadyStream,
     },
 };
@@ -614,7 +614,7 @@ where
     }
     .await;
     let (current_membership_info, remaining_session_stream) = Box::pin(
-        UninitializedSessionEventStream::new(
+        UninitializedEpochEventStream::new(
             session_stream,
             blend_config.time.session_transition_period(),
         )

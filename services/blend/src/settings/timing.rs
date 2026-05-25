@@ -19,7 +19,7 @@ pub struct TimingSettings {
     pub rounds_per_observation_window: NonZeroU64,
     /// Session transition period in rounds.
     pub rounds_per_session_transition_period: NonZeroU64,
-    pub epoch_transition_period_in_slots: NonZeroU64,
+    pub epoch_transition_period: Duration,
 }
 
 impl TimingSettings {
@@ -38,12 +38,5 @@ impl TimingSettings {
         Duration::from_secs(
             self.rounds_per_session_transition_period.get() * self.round_duration.as_secs(),
         )
-    }
-
-    pub const fn epoch_handler<ChainService, RuntimeServiceId>(
-        &self,
-        chain_service: ChainService,
-    ) -> EpochHandler<ChainService, RuntimeServiceId> {
-        EpochHandler::new(chain_service, self.epoch_transition_period_in_slots)
     }
 }

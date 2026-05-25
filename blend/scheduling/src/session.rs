@@ -13,47 +13,47 @@ use crate::stream::{FirstReadyStreamError, UninitializedFirstReadyStream};
 /// A staging type that initializes a [`SessionEventStream`] by consuming
 /// the first [`Session`] from the underlying stream, expected to be yielded
 /// within a short timeout.
-pub struct UninitializedSessionEventStream<Stream> {
+pub struct UninitializedEpochEventStream<Stream> {
     stream: UninitializedFirstReadyStream<Stream>,
     transition_period: Duration,
 }
 
-impl<Stream> UninitializedSessionEventStream<Stream> {
+impl<Stream> UninitializedEpochEventStream<Stream> {
     #[must_use]
-    pub const fn new(session_stream: Stream, transition_period: Duration) -> Self {
+    pub const fn new(epoch_stream: Stream, transition_period: Duration) -> Self {
         Self {
-            stream: UninitializedFirstReadyStream::new(session_stream),
+            stream: UninitializedFirstReadyStream::new(epoch_stream),
             transition_period,
         }
     }
 }
 
-impl<Stream, Session> UninitializedSessionEventStream<Stream>
+impl<Stream, Epoch> UninitializedEpochEventStream<Stream>
 where
-    Stream: futures::Stream<Item = Session> + Unpin,
+    Stream: futures::Stream<Item = Epoch> + Unpin,
 {
-    /// Initializes a [`SessionEventStream`] by consuming the first [`Session`]
+    /// Initializes a [`EpochEventStream`] by consuming the first [`Epoch`]
     /// from the underlying stream.
     ///
-    /// It returns the first [`Session`] and the initialized
-    /// [`SessionEventStream`], awaiting the first session for as long as
+    /// It returns the first [`Epoch`] and the initialized
+    /// [`EpochEventStream`], awaiting the first epoch for as long as
     /// necessary.
     /// It returns an error only if the underlying stream closes before yielding
-    /// a session.
+    /// an epoch.
     pub async fn await_first_ready(
         self,
-    ) -> Result<(Session, SessionEventStream<Stream>), FirstReadyStreamError> {
-        let (first_session, remaining_stream) = self.stream.first().await?;
+    ) -> Result<(Epoch, EpochEventStream<Stream>), FirstReadyStreamError> {
+        let (first_epoch, remaining_stream) = self.stream.first().await?;
         Ok((
-            first_session,
-            SessionEventStream::new(remaining_stream, self.transition_period),
+            first_epoch,
+            EpochEventStream::new(remaining_stream, self.transition_period),
         ))
     }
 }
 
 #[derive(Clone, Debug)]
-pub enum SessionEvent<Session> {
-    NewSession(Session),
+pub enum EpochEvent<Epoch> {
+    NewEpoch(Epoch),
     TransitionPeriodExpired,
 }
 

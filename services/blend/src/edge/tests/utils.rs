@@ -11,7 +11,7 @@ use lb_blend::{
         message_blend::provers::{
             BlendLayerProof, ProofsGeneratorSettings, leader::LeaderProofsGenerator,
         },
-        session::UninitializedSessionEventStream,
+        session::UninitializedEpochEventStream,
     },
 };
 use lb_chain_service::Epoch;
@@ -95,7 +95,7 @@ pub async fn spawn_run(
             OncePolStreamProvider,
             _,
         >(
-            UninitializedSessionEventStream::new(session_stream, Duration::ZERO),
+            UninitializedEpochEventStream::new(session_stream, Duration::ZERO),
             once(ready(SlotTick {
                 epoch: 1.into(),
                 slot: 1.into(),
