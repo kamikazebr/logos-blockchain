@@ -7,21 +7,19 @@ use lb_chain_service::Epoch;
 use lb_core::proofs::leader_proof::LeaderPublic;
 use overwatch::overwatch::OverwatchHandle;
 
+use crate::epoch::public::BlendMembershipEpochState;
+
 /// Secret `PoL` info associated to an epoch, as returned by the `PoL` info
 /// provider.
 #[derive(Clone)]
-pub struct PolEpochInfo {
-    pub epoch: Epoch,
-    pub poq_public_inputs: LeaderPublic,
-    /// The `PoL` secret inputs that are found to be winning at least one slot
-    /// in the current epoch.
+pub struct PolEpochInfo<NodeId> {
+    pub poq_public_inputs: BlendMembershipEpochState<NodeId>,
     pub poq_private_inputs: ProofOfLeadershipQuotaInputs,
 }
 
-impl Debug for PolEpochInfo {
+impl<NodeId> Debug for PolEpochInfo<NodeId> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PolEpochInfo")
-            .field("epoch", &self.epoch)
             .field("poq_public_inputs", &self.poq_public_inputs)
             .field("poq_private_inputs", &"<redacted>")
             .finish()
@@ -29,8 +27,8 @@ impl Debug for PolEpochInfo {
 }
 
 #[async_trait]
-pub trait PolInfoProvider<RuntimeServiceId> {
-    type Stream: Stream<Item = PolEpochInfo>;
+pub trait PolInfoProvider<NodeId, RuntimeServiceId> {
+    type Stream: Stream<Item = PolEpochInfo<NodeId>>;
 
     async fn subscribe(
         overwatch_handle: &OverwatchHandle<RuntimeServiceId>,

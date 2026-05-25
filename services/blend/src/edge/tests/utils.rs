@@ -119,7 +119,7 @@ pub fn settings(
 ) -> BlendConfig<NodeIdSender> {
     BlendConfig {
         time: TimingSettings {
-            rounds_per_session: NonZeroU64::new(1).unwrap(),
+            rounds_per_epoch: NonZeroU64::new(1).unwrap(),
             rounds_per_interval: NonZeroU64::new(1).unwrap(),
             round_duration: Duration::from_secs(1),
             rounds_per_observation_window: NonZeroU64::new(1).unwrap(),

@@ -358,7 +358,7 @@ async fn test_handle_session_transition_expired() {
     );
     // Set a long rounds_per_session to make the core quota large enough,
     // since we want the activity threshold to be sufficiently high.
-    settings.time.rounds_per_session = 648_000.try_into().unwrap();
+    settings.time.rounds_per_epoch = 648_000.try_into().unwrap();
 
     // Create backend.
     let public_info = new_public_info(session, membership.clone(), &settings);

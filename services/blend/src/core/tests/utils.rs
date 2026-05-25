@@ -124,7 +124,7 @@ pub fn settings<BackendSettings>(
 
 pub fn timing_settings() -> TimingSettings {
     TimingSettings {
-        rounds_per_session: 10.try_into().unwrap(),
+        rounds_per_epoch: 10.try_into().unwrap(),
         rounds_per_interval: 10.try_into().unwrap(),
         round_duration: Duration::from_secs(1),
         rounds_per_observation_window: 5.try_into().unwrap(),

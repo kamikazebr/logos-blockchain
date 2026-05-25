@@ -23,7 +23,6 @@ use crate::encap::ProofsVerifier;
 /// verified.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PoQVerificationInputsMinusSigningKey {
-    pub session: u64,
     pub core: CoreInputs,
     pub leader: LeaderInputs,
 }
