@@ -195,35 +195,25 @@ where
             CoreService::NodeId::try_from_provider_id(non_ephemeral_signing_key_public.as_bytes())
                 .expect("non-ephemeral signing public key should decode into a valid node id");
 
-        let epoch_event_stream = {
-            let epoch_stream =
-                get_epoch_membership_stream::<
-                    <EdgeService as EdgeServiceComponents>::ChainService,
-                    CoreService::NodeId,
-                    <EdgeService as EdgeServiceComponents>::TimeBackend,
-                    RuntimeServiceId,
-                >(overwatch_handle, non_ephemeral_signing_key_public, None)
-                .await
-                .expect("Failed to retrieve epoch membership stream.");
-
-            add_epoch_transitions(epoch_stream, settings.common.time.epoch_transition_period)
-        };
+        let epoch_stream = get_epoch_membership_stream::<
+            <EdgeService as EdgeServiceComponents>::ChainService,
+            CoreService::NodeId,
+            <EdgeService as EdgeServiceComponents>::TimeBackend,
+            RuntimeServiceId,
+        >(overwatch_handle, non_ephemeral_signing_key_public, None)
+        .await
+        .expect("Failed to retrieve epoch membership stream.");
 
         let (
-            EpochMembershipEvent::NewEpoch(BlendMembershipEpochState {
+            BlendMembershipEpochState {
                 membership: MembershipInfo { membership, .. },
                 ..
-            }),
+            },
             mut remaining_epoch_stream,
         ) = UninitializedFirstReadyStream::new(epoch_event_stream)
             .first()
             .await
-            .expect("The current epoch must be ready")
-        else {
-            panic!(
-                "The epoch membership stream ended before yielding the first item, but it should yield the current epoch's membership at least."
-            );
-        };
+            .expect("The current epoch must be ready");
 
         info!(
             target: LOG_TARGET,
@@ -238,6 +228,9 @@ where
         )
         .await?;
 
+        let epoch_stream_with_transitions =
+            add_epoch_transitions(epoch_stream, settings.common.time.epoch_transition_period);
+
         status_updater.notify_ready();
         info!(
             target: LOG_TARGET,
@@ -247,7 +240,7 @@ where
 
         loop {
             tokio::select! {
-                Some(epoch_event) = remaining_epoch_stream.next() => {
+                Some(epoch_event) = epoch_stream_with_transitions.next() => {
                     debug!(target: LOG_TARGET, ?epoch_event, "received epoch event");
                     instance = instance
                         .handle_epoch_event(

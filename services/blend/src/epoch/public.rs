@@ -100,19 +100,27 @@ where
     MembershipStream: Stream<Item = BlendMembershipEpochState<NodeId>> + Unpin,
 {
     futures::stream::unfold(
-        (membership_stream, false, false),
-        move |(mut memberships, expired_pending, has_previous)| async move {
-            if expired_pending {
-                sleep(transition_period).await;
+        (membership_stream, None, false),
+        move |(mut memberships, pending_timer, has_previous): (
+            _,
+            Option<_>,
+            bool,
+        )| async move {
+            if let Some(timer) = pending_timer {
+                timer.await;
                 return Some((
                     EpochMembershipEvent::PreviousEpochTransitionExpired,
-                    (memberships, false, has_previous),
+                    (memberships, None, has_previous),
                 ));
             }
             let membership = memberships.next().await?;
+            // Start the transition timer immediately, so its deadline is
+            // anchored to the moment the new epoch is observed rather than
+            // to when the consumer next polls the stream.
+            let next_timer = has_previous.then(|| Box::pin(sleep(transition_period)));
             Some((
                 EpochMembershipEvent::NewEpoch(membership),
-                (memberships, has_previous, true),
+                (memberships, next_timer, true),
             ))
         },
     )
