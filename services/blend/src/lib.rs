@@ -228,8 +228,10 @@ where
         )
         .await?;
 
-        let epoch_stream_with_transitions =
-            add_epoch_transitions(epoch_stream, settings.common.time.epoch_transition_period);
+        let epoch_stream_with_transitions = add_epoch_transitions(
+            remaining_epoch_stream,
+            settings.common.time.epoch_transition_period,
+        );
 
         status_updater.notify_ready();
         info!(

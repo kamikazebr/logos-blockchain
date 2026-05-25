@@ -101,11 +101,7 @@ where
 {
     futures::stream::unfold(
         (membership_stream, None, false),
-        move |(mut memberships, pending_timer, has_previous): (
-            _,
-            Option<_>,
-            bool,
-        )| async move {
+        move |(mut memberships, pending_timer, has_previous): (_, Option<_>, bool)| async move {
             if let Some(timer) = pending_timer {
                 timer.await;
                 return Some((
