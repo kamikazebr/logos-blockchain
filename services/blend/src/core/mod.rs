@@ -579,7 +579,7 @@ where
         membership_stream.map(
             move |MembershipInfo {
                       membership,
-                      session_number,
+                      epoch_number: session_number,
                       zk,
                   }| {
                 // This can be empty in case of an empty membership set.

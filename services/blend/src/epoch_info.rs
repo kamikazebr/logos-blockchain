@@ -6,7 +6,7 @@ use core::{
 };
 
 use async_trait::async_trait;
-use futures::Stream;
+use futures::{Stream, StreamExt as _};
 use lb_blend::proofs::quota::inputs::prove::private::ProofOfLeadershipQuotaInputs;
 use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
 use lb_core::proofs::leader_proof::LeaderPublic;
@@ -330,6 +330,25 @@ where
         }
 
         false
+    }
+
+    /// Drives this handler with a stream of slot ticks, producing the
+    /// corresponding [`EpochEvent`]s. Ticks that do not result in an event
+    /// (same epoch, no transition expiry) are filtered out.
+    pub fn into_event_stream(
+        self,
+        slot_ticks: impl Stream<Item = SlotTick>,
+    ) -> impl Stream<Item = EpochEvent>
+    where
+        ChainService: Send,
+        RuntimeServiceId: Send,
+    {
+        slot_ticks
+            .scan(self, |handler, tick| {
+                let fut = handler.tick(tick);
+                async move { Some(fut.await) }
+            })
+            .filter_map(|event| async move { event })
     }
 }
 

@@ -220,7 +220,7 @@ async fn handle_new_secret_epoch_info_recreates_handler() {
     let (node_id_sender, _node_id_receiver) = tokio::sync::mpsc::channel(1);
 
     let edge_membership = membership(&[core_node], local_node);
-    let membership_info = MembershipInfo::from_membership_and_session_number(edge_membership, 1);
+    let membership_info = MembershipInfo::from_membership_and_epoch_number(edge_membership, 1);
 
     let settings = settings(local_node, 1, node_id_sender);
     let overwatch = overwatch_handle();
@@ -269,7 +269,7 @@ async fn epoch_transition_full_lifecycle() {
 
     let edge_membership = membership(&[core_node], local_node);
     let membership_info =
-        MembershipInfo::from_membership_and_session_number(edge_membership.clone(), 1);
+        MembershipInfo::from_membership_and_epoch_number(edge_membership.clone(), 1);
     let settings = settings(local_node, 1, node_id_sender);
     let overwatch = overwatch_handle();
 

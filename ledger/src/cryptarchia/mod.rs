@@ -67,7 +67,7 @@ pub struct EpochState {
     /// beginning of the epoch)
     pub utxos: UtxoTree,
     pub total_stake: Value,
-    /// Lottery values computed based on `total_stake`
+    /// Lottery values wcomputed based on `total_stake`
     #[serde(with = "lb_groth16::serde::serde_fr")]
     pub lottery_0: Fr,
     #[serde(with = "lb_groth16::serde::serde_fr")]

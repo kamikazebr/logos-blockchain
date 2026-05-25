@@ -627,7 +627,7 @@ mod tests {
             let instance = instance
                 .handle_session_event(
                     // With an empty membership smaller than the minimal size.
-                    SessionEvent::NewSession(MembershipInfo::from_membership_and_session_number(
+                    SessionEvent::NewSession(MembershipInfo::from_membership_and_epoch_number(
                         membership(&[], local_node),
                         1,
                     )),
@@ -654,7 +654,7 @@ mod tests {
             // Broadcast -> Edge
             let instance = instance
                 .handle_session_event(
-                    SessionEvent::NewSession(MembershipInfo::from_membership_and_session_number(
+                    SessionEvent::NewSession(MembershipInfo::from_membership_and_epoch_number(
                         membership(&[1], local_node),
                         1,
                     )),
@@ -669,7 +669,7 @@ mod tests {
             // Edge -> Edge (stay)
             let instance = instance
                 .handle_session_event(
-                    SessionEvent::NewSession(MembershipInfo::from_membership_and_session_number(
+                    SessionEvent::NewSession(MembershipInfo::from_membership_and_epoch_number(
                         membership(&[1], local_node),
                         1,
                     )),
@@ -684,7 +684,7 @@ mod tests {
             // Edge -> Core
             let instance = instance
                 .handle_session_event(
-                    SessionEvent::NewSession(MembershipInfo::from_membership_and_session_number(
+                    SessionEvent::NewSession(MembershipInfo::from_membership_and_epoch_number(
                         membership(&[1], 1),
                         1,
                     )),

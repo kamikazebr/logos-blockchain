@@ -7,6 +7,7 @@ use std::pin::Pin;
 
 use futures::Stream;
 use lb_blend::scheduling::membership::Membership;
+use lb_chain_service::Epoch;
 use lb_core::crypto::ZkHash;
 use lb_groth16::fr_to_bytes;
 use lb_key_management_system_service::keys::{Ed25519PublicKey, ZkPublicKey};
@@ -18,15 +19,15 @@ pub struct MembershipInfo<NodeId> {
     pub membership: Membership<NodeId>,
     // `None` if membership is empty.
     pub zk: Option<ZkInfo>,
-    pub session_number: u64,
+    pub epoch_number: Epoch,
 }
 
 impl<NodeId> MembershipInfo<NodeId> {
     #[cfg(test)]
     #[must_use]
-    pub fn from_membership_and_session_number(
+    pub fn from_membership_and_epoch_number(
         membership: Membership<NodeId>,
-        session_number: u64,
+        epoch_number: Epoch,
     ) -> Self {
         let zk = if membership.is_empty() {
             None
@@ -36,7 +37,7 @@ impl<NodeId> MembershipInfo<NodeId> {
         Self {
             membership,
             zk,
-            session_number,
+            epoch_number,
         }
     }
 }

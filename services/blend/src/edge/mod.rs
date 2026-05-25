@@ -370,7 +370,7 @@ where
 
     info!(
         target: LOG_TARGET,
-        session = current_membership_info.session_number,
+        session = current_membership_info.epoch_number,
         members = current_membership_info.membership.size(),
         local_node_index = current_membership_info.membership.local_index(),
         has_zk = current_membership_info.zk.is_some(),
@@ -488,7 +488,7 @@ where
     };
 
     let new_public_inputs = PoQVerificationInputsMinusSigningKey {
-        session: new_membership_info.session_number,
+        session: new_membership_info.epoch_number,
         core: CoreInputs {
             quota: settings.cover.session_core_quota(
                 settings.num_blend_layers,
@@ -604,7 +604,7 @@ fn handle_new_secret_epoch_info<Backend, NodeId, ProofsGenerator, RuntimeService
             ),
             zk_root,
         },
-        session: current_membership_info.session_number,
+        session: current_membership_info.epoch_number,
     };
     let new_handler = MessageHandler::try_new_with_edge_condition_check(
         settings,
