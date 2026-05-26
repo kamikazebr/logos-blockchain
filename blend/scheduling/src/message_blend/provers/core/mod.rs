@@ -1,4 +1,4 @@
-use core::pin::Pin;
+use core::{marker::PhantomData, pin::Pin};
 
 use async_trait::async_trait;
 use futures::stream::{self, Stream, StreamExt as _};
@@ -32,14 +32,15 @@ pub trait CoreProofsGenerator<PoQGenerator>: Sized {
     async fn get_next_proof(&mut self) -> Option<BlendLayerProof>;
 }
 
-pub struct RealCoreProofsGenerator {
+pub struct RealCoreProofsGenerator<PoQGenerator> {
     remaining_quota: u64,
     pub(super) settings: ProofsGeneratorSettings,
     proofs_stream: Pin<Box<dyn Stream<Item = BlendLayerProof> + Send + Sync>>,
+    _phantom: PhantomData<PoQGenerator>,
 }
 
 #[async_trait]
-impl<PoQGenerator> CoreProofsGenerator<PoQGenerator> for RealCoreProofsGenerator
+impl<PoQGenerator> CoreProofsGenerator<PoQGenerator> for RealCoreProofsGenerator<PoQGenerator>
 where
     PoQGenerator: CoreProofOfQuotaGenerator + Clone + Send + Sync + 'static,
 {
@@ -53,6 +54,7 @@ where
             )),
             remaining_quota: settings.public_inputs.core.quota,
             settings,
+            _phantom: PhantomData,
         }
     }
 

@@ -10,7 +10,7 @@ use crate::message_blend::{
     CoreProofOfQuotaGenerator,
     provers::{
         BlendLayerProof, ProofsGeneratorSettings,
-        core::{CoreProofsGenerator, RealCoreProofsGenerator},
+        core::{CoreProofsGenerator as _, RealCoreProofsGenerator},
         leader::{LeaderProofsGenerator as _, RealLeaderProofsGenerator},
     },
 };
@@ -51,12 +51,12 @@ pub trait CoreAndLeaderProofsGenerator<CorePoQGenerator>: Sized {
     async fn get_next_leader_proof(&mut self) -> Option<BlendLayerProof>;
 }
 
-pub struct RealCoreAndLeaderProofsGenerator {
-    core_proofs_generator: RealCoreProofsGenerator,
+pub struct RealCoreAndLeaderProofsGenerator<CorePoQGenerator> {
+    core_proofs_generator: RealCoreProofsGenerator<CorePoQGenerator>,
     leader_proofs_generator: Option<RealLeaderProofsGenerator>,
 }
 
-impl RealCoreAndLeaderProofsGenerator {
+impl<CorePoQGenerator> RealCoreAndLeaderProofsGenerator<CorePoQGenerator> {
     #[cfg(test)]
     pub const fn override_settings(&mut self, new_settings: ProofsGeneratorSettings) {
         self.core_proofs_generator.settings = new_settings;
@@ -68,7 +68,7 @@ impl RealCoreAndLeaderProofsGenerator {
 
 #[async_trait]
 impl<CorePoQGenerator> CoreAndLeaderProofsGenerator<CorePoQGenerator>
-    for RealCoreAndLeaderProofsGenerator
+    for RealCoreAndLeaderProofsGenerator<CorePoQGenerator>
 where
     CorePoQGenerator: CoreProofOfQuotaGenerator + Clone + Send + Sync + 'static,
 {
@@ -114,11 +114,7 @@ where
     }
 
     async fn get_next_core_proof(&mut self) -> Option<BlendLayerProof> {
-        let proof =
-            <RealCoreProofsGenerator as CoreProofsGenerator<CorePoQGenerator>>::get_next_proof(
-                &mut self.core_proofs_generator,
-            )
-            .await?;
+        let proof = self.core_proofs_generator.get_next_proof().await?;
         tracing::trace!(
             target: LOG_TARGET,
             epoch = ?self.core_proofs_generator.settings.epoch,

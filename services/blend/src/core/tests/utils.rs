@@ -392,7 +392,6 @@ impl<CorePoQGenerator> CoreAndLeaderProofsGenerator<CorePoQGenerator>
         Self(settings.public_inputs.session)
     }
 
-    fn rotate_epoch(&mut self, _: LeaderInputs, _: Epoch) {}
     fn set_epoch_private(&mut self, _: ProofOfLeadershipQuotaInputs, _: LeaderInputs, _: Epoch) {}
 
     async fn get_next_core_proof(&mut self) -> Option<BlendLayerProof> {
@@ -413,10 +412,6 @@ impl ProofsVerifier for MockProofsVerifier {
     fn new(public_inputs: PoQVerificationInputsMinusSigningKey) -> Self {
         Self(public_inputs.session)
     }
-
-    fn start_epoch_transition(&mut self, _new_pol_inputs: LeaderInputs) {}
-
-    fn complete_epoch_transition(&mut self) {}
 
     fn verify_proof_of_quota(
         &self,

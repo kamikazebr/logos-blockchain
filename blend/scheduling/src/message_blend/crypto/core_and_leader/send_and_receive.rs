@@ -90,10 +90,6 @@ where
             &self.proofs_verifier,
         )
     }
-
-    pub fn complete_epoch_transition(&mut self) {
-        self.proofs_verifier.complete_epoch_transition();
-    }
 }
 
 // `Deref` and `DerefMut` so we can call the `encapsulate*` methods exposed by

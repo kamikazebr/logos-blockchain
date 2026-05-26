@@ -4,7 +4,7 @@ use test_log::test;
 
 use crate::message_blend::provers::{
     ProofsGeneratorSettings,
-    core_and_leader::{CoreAndLeaderProofsGenerator, RealCoreAndLeaderProofsGenerator},
+    core_and_leader::{CoreAndLeaderProofsGenerator as _, RealCoreAndLeaderProofsGenerator},
     test_utils::{
         CorePoQGeneratorFromPrivateCoreQuotaInputs,
         poq_public_inputs_from_session_public_inputs_and_signing_key, valid_proof_of_leader_inputs,
@@ -29,11 +29,10 @@ async fn proof_generation() {
     );
 
     for _ in 0..core_quota {
-        let proof = <RealCoreAndLeaderProofsGenerator as CoreAndLeaderProofsGenerator<
-            CorePoQGeneratorFromPrivateCoreQuotaInputs,
-        >>::get_next_core_proof(&mut core_and_leader_proofs_generator)
-        .await
-        .unwrap();
+        let proof = core_and_leader_proofs_generator
+            .get_next_core_proof()
+            .await
+            .unwrap();
         let verified_proof_of_quota = proof
             .proof_of_quota
             .into_inner()
@@ -58,11 +57,10 @@ async fn proof_generation() {
 
     // Next proof should be `None` since we ran out of core quota.
     assert!(
-        <RealCoreAndLeaderProofsGenerator as CoreAndLeaderProofsGenerator<
-            CorePoQGeneratorFromPrivateCoreQuotaInputs,
-        >>::get_next_core_proof(&mut core_and_leader_proofs_generator)
-        .await
-        .is_none()
+        core_and_leader_proofs_generator
+            .get_next_core_proof()
+            .await
+            .is_none()
     );
 
     let leadership_quota = 15;
@@ -78,21 +76,17 @@ async fn proof_generation() {
         encapsulation_layers: 1.try_into().unwrap(),
         epoch: Epoch::new(0),
     });
-    <RealCoreAndLeaderProofsGenerator as CoreAndLeaderProofsGenerator<
-        CorePoQGeneratorFromPrivateCoreQuotaInputs,
-    >>::set_epoch_private(
-        &mut core_and_leader_proofs_generator,
+    core_and_leader_proofs_generator.set_epoch_private(
         leadership_private_inputs,
         leadership_public_inputs.leader,
         Epoch::new(1),
     );
 
     for _ in 0..leadership_quota {
-        let proof = <RealCoreAndLeaderProofsGenerator as CoreAndLeaderProofsGenerator<
-            CorePoQGeneratorFromPrivateCoreQuotaInputs,
-        >>::get_next_leader_proof(&mut core_and_leader_proofs_generator)
-        .await
-        .unwrap();
+        let proof = core_and_leader_proofs_generator
+            .get_next_leader_proof()
+            .await
+            .unwrap();
         let verified_proof_of_quota = proof
             .proof_of_quota
             .into_inner()
@@ -116,100 +110,6 @@ async fn proof_generation() {
 }
 
 #[test(tokio::test)]
-async fn epoch_rotation() {
-    let core_quota = 10;
-    let (public_inputs, private_inputs) = valid_proof_of_quota_inputs(core_quota);
-
-    let mut core_and_leader_proofs_generator = RealCoreAndLeaderProofsGenerator::new(
-        ProofsGeneratorSettings {
-            local_node_index: None,
-            membership_size: 1,
-            public_inputs,
-            encapsulation_layers: 1.try_into().unwrap(),
-            epoch: Epoch::new(1),
-        },
-        CorePoQGeneratorFromPrivateCoreQuotaInputs::new(private_inputs),
-    );
-
-    // Request all but the last proof, before rotating epoch (with the same public
-    // data because proofs use hard-coded fixtures).
-    for _ in 0..(core_quota - 1) {
-        let proof = <RealCoreAndLeaderProofsGenerator as CoreAndLeaderProofsGenerator<
-            CorePoQGeneratorFromPrivateCoreQuotaInputs,
-        >>::get_next_core_proof(&mut core_and_leader_proofs_generator)
-        .await
-        .unwrap();
-        let verified_proof_of_quota = proof
-            .proof_of_quota
-            .into_inner()
-            .verify(
-                &poq_public_inputs_from_session_public_inputs_and_signing_key((
-                    public_inputs,
-                    proof.ephemeral_signing_key.public_key(),
-                )),
-            )
-            .unwrap();
-        proof
-            .proof_of_selection
-            .into_inner()
-            .verify(&VerifyInputs {
-                expected_node_index: 0,
-                key_nullifier: verified_proof_of_quota.key_nullifier(),
-                total_membership_size: 1,
-            })
-            .unwrap();
-    }
-
-    // Verify any traces of leader proofs have been removed.
-    assert!(
-        core_and_leader_proofs_generator
-            .leader_proofs_generator
-            .is_none()
-    );
-    assert!(
-        <RealCoreAndLeaderProofsGenerator as CoreAndLeaderProofsGenerator<
-            CorePoQGeneratorFromPrivateCoreQuotaInputs,
-        >>::get_next_leader_proof(&mut core_and_leader_proofs_generator)
-        .await
-        .is_none()
-    );
-    // Generate and verify last proof.
-    let proof = <RealCoreAndLeaderProofsGenerator as CoreAndLeaderProofsGenerator<
-        CorePoQGeneratorFromPrivateCoreQuotaInputs,
-    >>::get_next_core_proof(&mut core_and_leader_proofs_generator)
-    .await
-    .unwrap();
-    let verified_proof_of_quota = proof
-        .proof_of_quota
-        .into_inner()
-        .verify(
-            &poq_public_inputs_from_session_public_inputs_and_signing_key((
-                public_inputs,
-                proof.ephemeral_signing_key.public_key(),
-            )),
-        )
-        .unwrap();
-    proof
-        .proof_of_selection
-        .into_inner()
-        .verify(&VerifyInputs {
-            expected_node_index: 0,
-            key_nullifier: verified_proof_of_quota.key_nullifier(),
-            total_membership_size: 1,
-        })
-        .unwrap();
-
-    // Next proof should be `None` since we ran out of core quota.
-    assert!(
-        <RealCoreAndLeaderProofsGenerator as CoreAndLeaderProofsGenerator<
-            CorePoQGeneratorFromPrivateCoreQuotaInputs,
-        >>::get_next_core_proof(&mut core_and_leader_proofs_generator)
-        .await
-        .is_none()
-    );
-}
-
-#[test(tokio::test)]
 async fn epoch_private_info() {
     let core_quota = 10;
     let leadership_quota = 15;
@@ -228,21 +128,17 @@ async fn epoch_private_info() {
         CorePoQGeneratorFromPrivateCoreQuotaInputs::new(core_private_inputs.clone()),
     );
 
-    <RealCoreAndLeaderProofsGenerator as CoreAndLeaderProofsGenerator<
-        CorePoQGeneratorFromPrivateCoreQuotaInputs,
-    >>::set_epoch_private(
-        &mut core_and_leader_proofs_generator,
+    core_and_leader_proofs_generator.set_epoch_private(
         leadership_private_inputs,
         leadership_public_inputs.leader,
         Epoch::new(1),
     );
 
     // Leadership proof should be generated and verified correctly.
-    let proof = <RealCoreAndLeaderProofsGenerator as CoreAndLeaderProofsGenerator<
-        CorePoQGeneratorFromPrivateCoreQuotaInputs,
-    >>::get_next_leader_proof(&mut core_and_leader_proofs_generator)
-    .await
-    .unwrap();
+    let proof = core_and_leader_proofs_generator
+        .get_next_leader_proof()
+        .await
+        .unwrap();
     let verified_proof_of_quota = proof
         .proof_of_quota
         .into_inner()
@@ -264,11 +160,10 @@ async fn epoch_private_info() {
         .unwrap();
 
     // New proof should verify successfully.
-    let proof = <RealCoreAndLeaderProofsGenerator as CoreAndLeaderProofsGenerator<
-        CorePoQGeneratorFromPrivateCoreQuotaInputs,
-    >>::get_next_leader_proof(&mut core_and_leader_proofs_generator)
-    .await
-    .unwrap();
+    let proof = core_and_leader_proofs_generator
+        .get_next_leader_proof()
+        .await
+        .unwrap();
     let verified_proof_of_quota = proof
         .proof_of_quota
         .into_inner()
@@ -301,11 +196,10 @@ async fn epoch_private_info() {
     });
 
     // We test that core proof generation still works fine
-    let proof = <RealCoreAndLeaderProofsGenerator as CoreAndLeaderProofsGenerator<
-        CorePoQGeneratorFromPrivateCoreQuotaInputs,
-    >>::get_next_core_proof(&mut core_and_leader_proofs_generator)
-    .await
-    .unwrap();
+    let proof = core_and_leader_proofs_generator
+        .get_next_core_proof()
+        .await
+        .unwrap();
     let verified_proof_of_quota = proof
         .proof_of_quota
         .into_inner()

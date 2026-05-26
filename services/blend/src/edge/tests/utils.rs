@@ -48,14 +48,6 @@ impl LeaderProofsGenerator for MockLeaderProofsGenerator {
         Self
     }
 
-    fn rotate_epoch(
-        &mut self,
-        _new_epoch_public: LeaderInputs,
-        _new_private_inputs: ProofOfLeadershipQuotaInputs,
-        _new_epoch: Epoch,
-    ) {
-    }
-
     async fn get_next_proof(&mut self) -> BlendLayerProof {
         mock_blend_proof()
     }

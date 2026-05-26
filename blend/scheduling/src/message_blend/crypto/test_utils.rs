@@ -87,15 +87,6 @@ impl ProofsVerifier for TestEpochChangeProofsVerifier {
         Self(public_inputs, None)
     }
 
-    fn start_epoch_transition(&mut self, new_pol_inputs: LeaderInputs) {
-        self.1 = Some(self.0.leader);
-        self.0.leader = new_pol_inputs;
-    }
-
-    fn complete_epoch_transition(&mut self) {
-        self.1 = None;
-    }
-
     fn verify_proof_of_quota(
         &self,
         proof: ProofOfQuota,

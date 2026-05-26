@@ -4,7 +4,7 @@ use test_log::test;
 
 use crate::message_blend::provers::{
     ProofsGeneratorSettings,
-    core::{CoreProofsGenerator, RealCoreProofsGenerator},
+    core::{CoreProofsGenerator as _, RealCoreProofsGenerator},
     test_utils::{
         CorePoQGeneratorFromPrivateCoreQuotaInputs,
         poq_public_inputs_from_session_public_inputs_and_signing_key, valid_proof_of_quota_inputs,
@@ -28,11 +28,7 @@ async fn proof_generation() {
     );
 
     for _ in 0..core_quota {
-        let proof = <RealCoreProofsGenerator as CoreProofsGenerator<
-            CorePoQGeneratorFromPrivateCoreQuotaInputs,
-        >>::get_next_proof(&mut core_proofs_generator)
-        .await
-        .unwrap();
+        let proof = core_proofs_generator.get_next_proof().await.unwrap();
         let verified_proof_of_quota = proof
             .proof_of_quota
             .into_inner()
@@ -56,11 +52,5 @@ async fn proof_generation() {
     }
 
     // Next proof should be `None` since we ran out of core quota.
-    assert!(
-        <RealCoreProofsGenerator as CoreProofsGenerator<
-            CorePoQGeneratorFromPrivateCoreQuotaInputs,
-        >>::get_next_proof(&mut core_proofs_generator)
-        .await
-        .is_none()
-    );
+    assert!(core_proofs_generator.get_next_proof().await.is_none());
 }
