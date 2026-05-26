@@ -206,7 +206,6 @@ mod tests {
             LotteryConstants::new(NonNegativeRatio::new(1, 10.try_into().unwrap()))
                 .compute_lottery_values(5000);
         let chain_data = PoQChainInputsData {
-            session: 150,
             core_root: BigUint::from_str(
                 "10774149910279330054096178616484626574938100628643657398591620611653283350567",
             )
@@ -254,7 +253,6 @@ mod tests {
             leader_quota: common_data.leader_quota,
             pol_epoch_nonce: chain_data.pol_epoch_nonce,
             pol_ledger_aged: chain_data.pol_ledger_aged,
-            session: chain_data.session,
             lottery_0: chain_data.lottery_0,
             lottery_1: chain_data.lottery_1,
         };
@@ -268,7 +266,6 @@ mod tests {
             LotteryConstants::new(NonNegativeRatio::new(1, 10.try_into().unwrap()))
                 .compute_lottery_values(5000);
         let chain_data = PoQChainInputsData {
-            session: 150,
             core_root: BigUint::from_str(
                 "11932007478822307154060471648284351639702201082133930350572683284818742022376",
             )
@@ -462,7 +459,6 @@ mod tests {
             leader_quota: common_data.leader_quota,
             pol_epoch_nonce: chain_data.pol_epoch_nonce,
             pol_ledger_aged: chain_data.pol_ledger_aged,
-            session: chain_data.session,
             lottery_0: chain_data.lottery_0,
             lottery_1: chain_data.lottery_1,
         };
