@@ -8,7 +8,6 @@ use lb_blend_message::{
         validated::RequiredProofOfSelectionVerificationInputs,
     },
 };
-use lb_blend_proofs::quota::inputs::prove::public::LeaderInputs;
 use lb_cryptarchia_engine::Epoch;
 
 use crate::{
@@ -59,13 +58,6 @@ where
             ),
             proofs_verifier: ProofsVerifier::new(public_info),
         }
-    }
-
-    pub fn rotate_epoch(&mut self, new_epoch_public: LeaderInputs, new_epoch: Epoch) {
-        self.sender_processor
-            .rotate_epoch(new_epoch_public, new_epoch);
-        self.proofs_verifier
-            .start_epoch_transition(new_epoch_public);
     }
 }
 
@@ -151,218 +143,6 @@ mod test {
         },
     };
 
-    #[test]
-    fn epoch_rotation() {
-        let mut processor = SessionCryptographicProcessor::<
-            _,
-            _,
-            TestEpochChangeCoreAndLeaderProofsGenerator,
-            TestEpochChangeProofsVerifier,
-        >::new(
-            SessionCryptographicProcessorSettings {
-                non_ephemeral_encryption_key: [0; _].into(),
-                num_blend_layers: NonZeroU64::new(1).unwrap(),
-            },
-            Membership::new_without_local(&[Node {
-                address: Multiaddr::empty(),
-                id: PeerId::random(),
-                public_key: Ed25519PublicKey::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE]).unwrap(),
-            }]),
-            PoQVerificationInputsMinusSigningKey {
-                session: 1,
-                core: CoreInputs {
-                    quota: 1,
-                    zk_root: ZkHash::ZERO,
-                },
-                leader: LeaderInputs {
-                    message_quota: 1,
-                    pol_epoch_nonce: ZkHash::ZERO,
-                    pol_ledger_aged: ZkHash::ZERO,
-                    lottery_0: Fr::ZERO,
-                    lottery_1: Fr::ZERO,
-                },
-            },
-            MockCorePoQGenerator,
-            Epoch::new(0),
-        );
-
-        let new_leader_inputs = LeaderInputs {
-            pol_ledger_aged: ZkHash::ONE,
-            pol_epoch_nonce: ZkHash::ONE,
-            message_quota: 2,
-            lottery_0: Fr::ONE,
-            lottery_1: Fr::ONE,
-        };
-
-        processor.rotate_epoch(new_leader_inputs, Epoch::new(1));
-
-        assert_eq!(processor.proofs_verifier.0.leader, new_leader_inputs);
-        assert_eq!(
-            processor.proofs_verifier.1,
-            Some(LeaderInputs {
-                message_quota: 1,
-                pol_epoch_nonce: ZkHash::ZERO,
-                pol_ledger_aged: ZkHash::ZERO,
-                lottery_0: Fr::ZERO,
-                lottery_1: Fr::ZERO,
-            })
-        );
-        assert_eq!(
-            processor.proofs_generator().0.public_inputs.leader,
-            new_leader_inputs
-        );
-
-        processor.complete_epoch_transition();
-
-        assert!(processor.proofs_verifier.1.is_none());
-    }
-
-    /// Consecutive epoch rotations: each call replaces the previous epoch
-    /// inputs with the old current inputs.
-    #[test]
-    fn consecutive_epoch_rotations() {
-        let initial_leader = LeaderInputs {
-            message_quota: 1,
-            pol_epoch_nonce: ZkHash::ZERO,
-            pol_ledger_aged: ZkHash::ZERO,
-            lottery_0: Fr::ZERO,
-            lottery_1: Fr::ZERO,
-        };
-        let mut processor = SessionCryptographicProcessor::<
-            _,
-            _,
-            TestEpochChangeCoreAndLeaderProofsGenerator,
-            TestEpochChangeProofsVerifier,
-        >::new(
-            SessionCryptographicProcessorSettings {
-                non_ephemeral_encryption_key: [0; _].into(),
-                num_blend_layers: NonZeroU64::new(1).unwrap(),
-            },
-            Membership::new_without_local(&[Node {
-                address: Multiaddr::empty(),
-                id: PeerId::random(),
-                public_key: Ed25519PublicKey::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE]).unwrap(),
-            }]),
-            PoQVerificationInputsMinusSigningKey {
-                session: 1,
-                core: CoreInputs {
-                    quota: 1,
-                    zk_root: ZkHash::ZERO,
-                },
-                leader: initial_leader,
-            },
-            MockCorePoQGenerator,
-            Epoch::new(0),
-        );
-
-        // Rotate to epoch 1.
-        let epoch_1_leader = LeaderInputs {
-            pol_ledger_aged: ZkHash::ONE,
-            pol_epoch_nonce: ZkHash::ONE,
-            message_quota: 2,
-            lottery_0: Fr::ONE,
-            lottery_1: Fr::ONE,
-        };
-        processor.rotate_epoch(epoch_1_leader, Epoch::new(1));
-        assert_eq!(processor.proofs_verifier.0.leader, epoch_1_leader);
-        assert_eq!(processor.proofs_verifier.1, Some(initial_leader));
-
-        // Rotate again to epoch 2 without completing the epoch 0→1 transition.
-        // The previous epoch inputs should now be epoch 1's inputs.
-        let epoch_2_leader = LeaderInputs {
-            pol_ledger_aged: ZkHash::ZERO,
-            pol_epoch_nonce: ZkHash::ONE,
-            message_quota: 3,
-            lottery_0: Fr::ZERO,
-            lottery_1: Fr::ONE,
-        };
-        processor.rotate_epoch(epoch_2_leader, Epoch::new(2));
-        assert_eq!(processor.proofs_verifier.0.leader, epoch_2_leader);
-        assert_eq!(processor.proofs_verifier.1, Some(epoch_1_leader));
-        assert_eq!(
-            processor.proofs_generator().0.public_inputs.leader,
-            epoch_2_leader
-        );
-
-        // Complete the transition — clears previous epoch.
-        processor.complete_epoch_transition();
-        assert!(processor.proofs_verifier.1.is_none());
-        assert_eq!(processor.proofs_verifier.0.leader, epoch_2_leader);
-    }
-
-    /// `complete_epoch_transition` followed by
-    /// `NewEpochAndOldEpochTransitionExpired` pattern: complete first, then
-    /// rotate.
-    #[test]
-    fn complete_then_rotate_epoch() {
-        let initial_leader = LeaderInputs {
-            message_quota: 1,
-            pol_epoch_nonce: ZkHash::ZERO,
-            pol_ledger_aged: ZkHash::ZERO,
-            lottery_0: Fr::ZERO,
-            lottery_1: Fr::ZERO,
-        };
-        let mut processor = SessionCryptographicProcessor::<
-            _,
-            _,
-            TestEpochChangeCoreAndLeaderProofsGenerator,
-            TestEpochChangeProofsVerifier,
-        >::new(
-            SessionCryptographicProcessorSettings {
-                non_ephemeral_encryption_key: [0; _].into(),
-                num_blend_layers: NonZeroU64::new(1).unwrap(),
-            },
-            Membership::new_without_local(&[Node {
-                address: Multiaddr::empty(),
-                id: PeerId::random(),
-                public_key: Ed25519PublicKey::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE]).unwrap(),
-            }]),
-            PoQVerificationInputsMinusSigningKey {
-                session: 1,
-                core: CoreInputs {
-                    quota: 1,
-                    zk_root: ZkHash::ZERO,
-                },
-                leader: initial_leader,
-            },
-            MockCorePoQGenerator,
-            Epoch::new(0),
-        );
-
-        // Rotate to epoch 1.
-        let epoch_1_leader = LeaderInputs {
-            pol_ledger_aged: ZkHash::ONE,
-            pol_epoch_nonce: ZkHash::ONE,
-            message_quota: 2,
-            lottery_0: Fr::ONE,
-            lottery_1: Fr::ONE,
-        };
-        processor.rotate_epoch(epoch_1_leader, Epoch::new(1));
-
-        // Simulate NewEpochAndOldEpochTransitionExpired:
-        // first complete, then rotate.
-        processor.complete_epoch_transition();
-        assert!(processor.proofs_verifier.1.is_none());
-
-        let epoch_2_leader = LeaderInputs {
-            pol_ledger_aged: ZkHash::ZERO,
-            pol_epoch_nonce: ZkHash::ONE,
-            message_quota: 3,
-            lottery_0: Fr::ZERO,
-            lottery_1: Fr::ONE,
-        };
-        processor.rotate_epoch(epoch_2_leader, Epoch::new(2));
-
-        // Verifier now has epoch 2 as current, epoch 1 as previous.
-        assert_eq!(processor.proofs_verifier.0.leader, epoch_2_leader);
-        assert_eq!(processor.proofs_verifier.1, Some(epoch_1_leader));
-        // Generator updated to epoch 2.
-        assert_eq!(
-            processor.proofs_generator().0.public_inputs.leader,
-            epoch_2_leader
-        );
-    }
-
     /// `set_epoch_private` propagates private inputs for leader proof
     /// generation.
     #[test]
@@ -390,7 +170,6 @@ mod test {
                 public_key: Ed25519PublicKey::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE]).unwrap(),
             }]),
             PoQVerificationInputsMinusSigningKey {
-                session: 1,
                 core: CoreInputs {
                     quota: 1,
                     zk_root: ZkHash::ZERO,
@@ -401,7 +180,7 @@ mod test {
             Epoch::new(0),
         );
 
-        assert!(processor.proofs_generator().1.is_none());
+        assert!(processor.proofs_generator().0.is_none());
 
         let private_inputs = ProofOfLeadershipQuotaInputs {
             aged_path_and_selectors: [(ZkHash::ONE, true); _],
@@ -414,6 +193,6 @@ mod test {
 
         processor.set_epoch_private(private_inputs.clone(), initial_leader, Epoch::new(1));
 
-        assert!(processor.proofs_generator().1 == Some(private_inputs));
+        assert!(processor.proofs_generator().0 == Some(private_inputs));
     }
 }

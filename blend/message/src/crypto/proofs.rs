@@ -34,7 +34,6 @@ impl Default for PoQVerificationInputsMinusSigningKey {
         use lb_groth16::{Field as _, Fr};
 
         Self {
-            session: 1,
             core: CoreInputs {
                 zk_root: ZkHash::default(),
                 quota: 1,
@@ -97,16 +96,12 @@ impl ProofsVerifier for RealProofsVerifier {
         proof: ProofOfQuota,
         signing_key: &Ed25519PublicKey,
     ) -> Result<VerifiedProofOfQuota, Self::Error> {
-        let PoQVerificationInputsMinusSigningKey {
-            core,
-            leader,
-            session,
-        } = self.current_inputs;
+        let PoQVerificationInputsMinusSigningKey { core, leader } = self.current_inputs;
 
         // Try with current input, and if it fails, try with the previous one, if any
         // (i.e., within the epoch transition period).
         tracing::trace!(
-            "Verifying proof of quota with key nullifier {:?}, signing key: {signing_key:?}, session {session:?}, public core inputs: {core:?} and leader inputs: {leader:?}.",
+            "Verifying proof of quota with key nullifier {:?}, signing key: {signing_key:?}, public core inputs: {core:?} and leader inputs: {leader:?}.",
             hex::encode(fr_to_bytes(&proof.key_nullifier()))
         );
         let start = Instant::now();
@@ -114,7 +109,6 @@ impl ProofsVerifier for RealProofsVerifier {
             .verify(&PublicInputs {
                 core,
                 leader,
-                session,
                 signing_key: *signing_key.as_inner(),
             })
             .or_else(|_| {
@@ -129,7 +123,6 @@ impl ProofsVerifier for RealProofsVerifier {
                     .verify(&PublicInputs {
                         core,
                         leader: previous_epoch_inputs,
-                        session,
                         signing_key: *signing_key.as_inner(),
                     })
                     .map_err(Error::ProofOfQuota)
@@ -278,8 +271,7 @@ mod tests {
 
         verifier.start_epoch_transition(epoch_1_leader());
 
-        // Session and core inputs should not change during epoch transitions.
-        assert_eq!(verifier.current_inputs.session, initial.session);
+        // Core inputs should not change during epoch transitions.
         assert_eq!(verifier.current_inputs.core, initial.core);
     }
 }
