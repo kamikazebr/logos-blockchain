@@ -6,6 +6,8 @@ use nom::{
     number::complete::{le_u16, le_u32, u8},
 };
 
+use lb_key_management_system_keys::keys::ZkPublicKey;
+
 use crate::mantle::ops::channel::{ChannelId, Ed25519PublicKey, MsgId};
 
 pub mod array;
@@ -136,5 +138,20 @@ impl NomDecode for Ed25519PublicKey {
             Self::from_bytes(&key_bytes).map_err(|_| Error::new(bytes, ErrorKind::Fail))
         })
         .parse(bytes)
+    }
+}
+
+// ZkPublicKey = Fr (32 bytes, little-endian)
+impl NomEncode for ZkPublicKey {
+    fn encode(&self) -> Vec<u8> {
+        self.into_inner().encode()
+    }
+}
+
+impl NomDecode for ZkPublicKey {
+    type Output = Self;
+
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
+        map(Fr::decode, Self::from).parse(bytes)
     }
 }

@@ -10,6 +10,7 @@ use lb_core::{
     events::Events,
     mantle::{
         GenesisTx, NoteId, TxHash, Utxo, Value,
+        frozen_notes::FrozenNotes,
         ledger::Operation as _,
         ops::{
             channel::{
@@ -114,6 +115,11 @@ impl LedgerState {
     }
 
     #[must_use]
+    pub const fn frozen_notes(&self) -> &FrozenNotes {
+        self.channels.frozen_notes()
+    }
+
+    #[must_use]
     pub const fn sdp_ledger(&self) -> &sdp::SdpLedger {
         &self.sdp
     }
@@ -208,6 +214,7 @@ impl LedgerState {
         mut self,
         config_op: &ChannelConfigOp,
         config_sigs: &ChannelMultiSigProof,
+        utxos: &UtxoTree,
         tx_hash: &TxHash,
         block_slot: Slot,
     ) -> Result<(Self, Events), Error> {
@@ -223,6 +230,7 @@ impl LedgerState {
             .execute(ChannelConfigExecutionContext {
                 channels: self.channels,
                 block_slot,
+                utxos: utxos.clone(),
             })
             .inspect_err(
                 |err| error!(target: LOG_TARGET, %err, "failed to apply channel set-keys message"),
@@ -245,6 +253,7 @@ impl LedgerState {
             .sdp
             .try_apply_sdp_declaration(
                 utxo_tree,
+                self.channels.frozen_notes(),
                 sdp_declare_op,
                 sdp_declare_zk_sig,
                 sdp_declare_ed_sig,

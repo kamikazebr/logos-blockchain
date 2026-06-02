@@ -5,7 +5,11 @@ use futures::future::join_all;
 use lb_common_http_client::CommonHttpClient;
 use lb_core::mantle::{
     TxHash, Utxo,
-    ops::channel::{config::Keys, deposit::Metadata, inscribe::Inscription},
+    ops::channel::{
+        config::{Keys, ZkKeys},
+        deposit::Metadata,
+        inscribe::Inscription,
+    },
 };
 use lb_key_management_system_service::keys::{Ed25519Key, ZkPublicKey};
 use lb_testing_framework::{LbcManualCluster, NodeHttpClient};
@@ -218,6 +222,8 @@ pub(super) async fn submit_zone_channel_config(
             posting_timeout.into(),
             ZONE_CHANNEL_WITHDRAW_THRESHOLD,
             ZONE_CHANNEL_DEPOSIT_THRESHOLD,
+            // TODO: TOTO!
+            ZkKeys::new_unchecked([ZkPublicKey::zero()].into()),
         )
         .await
         .map_err(|error| StepError::LogicalError {

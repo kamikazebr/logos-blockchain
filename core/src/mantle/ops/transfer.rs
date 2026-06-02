@@ -7,6 +7,7 @@ use crate::{
     mantle::{
         TxHash,
         encoding::encode_transfer_op,
+        frozen_notes::FrozenNotes,
         ledger::{self, Inputs, Operation, Outputs, Utxos},
         ops::OpId,
     },
@@ -61,6 +62,7 @@ pub enum TransferError {
 
 pub struct TransferValidationContext<'a> {
     pub locked_notes: &'a LockedNotes,
+    pub frozen_notes: &'a FrozenNotes,
     pub utxos: &'a Utxos,
     pub tx_hash: &'a TxHash,
     pub transfer_sig: &'a ZkSignature,
@@ -79,7 +81,8 @@ impl Operation<TransferValidationContext<'_>> for TransferOp {
             return Err(TransferError::NoInputTransfer);
         }
         // Validate Inputs
-        self.inputs.validate(ctx.locked_notes, ctx.utxos)?;
+        self.inputs
+            .validate(ctx.locked_notes, ctx.frozen_notes, ctx.utxos)?;
         // Validate Outputs
         self.outputs.validate()?;
         // Check the transfer Proof

@@ -9,6 +9,7 @@ use lb_core::{
     events::Events,
     mantle::{
         GenesisTx, NoteId, TxHash, Utxo, Value,
+        frozen_notes::FrozenNotes,
         gas::{Gas, GasConstants, GasCost, GasPrice},
         genesis_tx::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE},
         ledger::Operation as _,
@@ -408,6 +409,7 @@ impl LedgerState {
     pub fn try_apply_transfer<Id, Constants: GasConstants>(
         mut self,
         locked_notes: &LockedNotes,
+        frozen_notes: &FrozenNotes,
         transfer_op: &TransferOp,
         transfer_sig: &ZkSignature,
         tx_hash: TxHash,
@@ -416,6 +418,7 @@ impl LedgerState {
         transfer_op
             .validate(&TransferValidationContext {
                 locked_notes,
+                frozen_notes,
                 utxos: &self.utxos,
                 tx_hash: &tx_hash,
                 transfer_sig,
@@ -1303,6 +1306,7 @@ pub mod tests {
         let output_note = Note::new(200, output_note_sk.to_public_key());
 
         let locked_notes = LockedNotes::new();
+        let frozen_notes = FrozenNotes::new();
         let ledger_state = LedgerState::from_utxos([input_utxo], &config(), Fr::ZERO);
         let (tx, transfer_op, transfer_sig) = create_tx_with_transfer(
             &[(&note_sk, &input_utxo), (&note_sk, &input_utxo)],
@@ -1313,6 +1317,7 @@ pub mod tests {
             AuthenticatedMantleTx::total_gas_cost::<MainnetGasConstants>(&tx, GasPrices::new(0, 0));
         let result = ledger_state.try_apply_transfer::<(), MainnetGasConstants>(
             &locked_notes,
+            &frozen_notes,
             &transfer_op,
             &transfer_sig,
             tx.hash(),
@@ -1337,6 +1342,7 @@ pub mod tests {
         let output_note2 = Note::new(3000, output_note2_sk.to_public_key());
 
         let locked_notes = LockedNotes::new();
+        let frozen_notes = FrozenNotes::new();
         let ledger_state = LedgerState::from_utxos([input_utxo], &config(), Fr::ZERO);
         let (tx, transfer_op, transfer_sig) =
             create_tx_with_transfer(&[(&note_sk, &input_utxo)], vec![output_note1, output_note2]);
@@ -1346,6 +1352,7 @@ pub mod tests {
         let (new_state, balance, events) = ledger_state
             .try_apply_transfer::<(), MainnetGasConstants>(
                 &locked_notes,
+                &frozen_notes,
                 &transfer_op,
                 &transfer_sig,
                 tx.hash(),
@@ -1379,11 +1386,13 @@ pub mod tests {
             vec![],
         );
         let locked_notes = LockedNotes::new();
+        let frozen_notes = FrozenNotes::new();
         let _fees =
             AuthenticatedMantleTx::total_gas_cost::<MainnetGasConstants>(&tx, GasPrices::new(0, 0));
         let (final_state, final_balance, events) = new_state
             .try_apply_transfer::<(), MainnetGasConstants>(
                 &locked_notes,
+                &frozen_notes,
                 &transfer_op,
                 &transfer_sig,
                 tx.hash(),
@@ -1435,6 +1444,7 @@ pub mod tests {
         ];
 
         let locked_notes = LockedNotes::new();
+        let frozen_notes = FrozenNotes::new();
         for non_existent_utxo in invalid_utxos {
             let (tx, transfer_op, transfer_sig) =
                 create_tx_with_transfer(&[(&ZkKey::zero(), &non_existent_utxo)], vec![]);
@@ -1442,6 +1452,7 @@ pub mod tests {
                 .clone()
                 .try_apply_transfer::<(), MainnetGasConstants>(
                     &locked_notes,
+                    &frozen_notes,
                     &transfer_op,
                     &transfer_sig,
                     tx.hash(),
@@ -1463,6 +1474,7 @@ pub mod tests {
         let output_note = Note::new(1, Fr::from(BigUint::from(2u8)).into());
 
         let locked_notes = LockedNotes::new();
+        let frozen_notes = FrozenNotes::new();
         let ledger_state = LedgerState::from_utxos([input_utxo], &config(), Fr::ZERO);
         let (tx, transfer_op, transfer_sig) =
             create_tx_with_transfer(&[(&input_sk, &input_utxo)], vec![output_note, output_note]);
@@ -1471,6 +1483,7 @@ pub mod tests {
             .clone()
             .try_apply_transfer::<(), MainnetGasConstants>(
                 &locked_notes,
+                &frozen_notes,
                 &transfer_op,
                 &transfer_sig,
                 tx.hash(),
@@ -1485,6 +1498,7 @@ pub mod tests {
             ledger_state
                 .try_apply_transfer::<(), MainnetGasConstants>(
                     &locked_notes,
+                    &frozen_notes,
                     &transfer_op,
                     &transfer_sig,
                     tx.hash()
@@ -1506,6 +1520,7 @@ pub mod tests {
         };
 
         let locked_notes = LockedNotes::new();
+        let frozen_notes = FrozenNotes::new();
         let ledger_state = LedgerState::from_utxos([input_utxo], &config(), Fr::ZERO);
         let (tx, transfer_op, transfer_sig) =
             create_tx_with_transfer(&[(&input_sk, &input_utxo)], vec![]);
@@ -1514,6 +1529,7 @@ pub mod tests {
             AuthenticatedMantleTx::total_gas_cost::<MainnetGasConstants>(&tx, GasPrices::new(0, 0));
         let result = ledger_state.try_apply_transfer::<(), MainnetGasConstants>(
             &locked_notes,
+            &frozen_notes,
             &transfer_op,
             &transfer_sig,
             tx.hash(),
@@ -1538,6 +1554,7 @@ pub mod tests {
         };
 
         let locked_notes = LockedNotes::new();
+        let frozen_notes = FrozenNotes::new();
         let ledger_state = LedgerState::from_utxos([input_utxo], &config(), Fr::ZERO);
         let (tx, transfer_op, transfer_sig) = create_tx_with_transfer(
             &[(&input_sk, &input_utxo)],
@@ -1546,6 +1563,7 @@ pub mod tests {
 
         let result = ledger_state.try_apply_transfer::<(), MainnetGasConstants>(
             &locked_notes,
+            &frozen_notes,
             &transfer_op,
             &transfer_sig,
             tx.hash(),

@@ -8,6 +8,7 @@ use crate::{
     mantle::{
         TxHash,
         channel::{Channels, Error},
+        frozen_notes::FrozenNotes,
         ledger::{Inputs, Operation, Utxos},
         nom::{NomBoundedVec, NomDecode, NomEncode},
         ops::{OpId, channel::ChannelId},
@@ -63,6 +64,7 @@ impl NomDecode for DepositOp {
 pub struct DepositValidationContext<'a> {
     pub channels: &'a Channels,
     pub locked_notes: &'a LockedNotes,
+    pub frozen_notes: &'a FrozenNotes,
     pub utxos: &'a Utxos,
     pub tx_hash: &'a TxHash,
     pub deposit_sig: &'a ZkSignature,
@@ -91,7 +93,8 @@ impl Operation<DepositValidationContext<'_>> for DepositOp {
         }
 
         // Check that inputs are valid
-        self.inputs.validate(ctx.locked_notes, ctx.utxos)?;
+        self.inputs
+            .validate(ctx.locked_notes, ctx.frozen_notes, ctx.utxos)?;
 
         // Check the signature
         let pks = self.inputs.get_pk(ctx.utxos)?;
@@ -112,12 +115,29 @@ impl Operation<DepositValidationContext<'_>> for DepositOp {
         // Remove inputs from the ledger
         ctx.utxos = self.inputs.execute(ctx.utxos)?;
 
-        // Increase the balance of the channel
         if let Some(channel) = ctx.channels.channels.get_mut(&self.channel_id) {
-            channel.balance = channel
-                .balance
+            // Increase the balance of the channel
+            channel.floating_balance = channel
+                .floating_balance
                 .checked_add(amount_deposited)
                 .ok_or(Error::BalanceOverflow)?;
+            channel.solvency = channel
+                .solvency
+                .checked_add(amount_deposited)
+                .ok_or(Error::BalanceOverflow)?;
+
+            // mark the channel if it is eligible to mint frozen notes and not already
+            // marked
+            if !channel.sequencers_zk_pks.is_empty()
+                && channel.sequencers_zk_pks.len() < channel.floating_balance as usize
+                && !ctx
+                    .channels
+                    .mint_eligible_channels
+                    .contains(&self.channel_id)
+            {
+                ctx.channels.mint_eligible_channels.push(self.channel_id);
+            }
+
             Ok(self)
         } else {
             Err(Error::ChannelNotFound {

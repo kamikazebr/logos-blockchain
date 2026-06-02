@@ -234,7 +234,7 @@ impl LedgerState {
     /// leadership and in general any changes that not related to
     /// transactions that should be applied before that.
     pub fn try_apply_header<LeaderProof, Id>(
-        self,
+        mut self,
         slot: Slot,
         proof: &LeaderProof,
         config: &Config,
@@ -242,6 +242,25 @@ impl LedgerState {
     where
         LeaderProof: leader_proof::LeaderProof,
     {
+        // Mint frozen notes for channels if the epoch is a new one
+        let old_epoch = config.epoch(self.cryptarchia_ledger.slot);
+        let new_epoch = config.epoch(slot);
+        if new_epoch > old_epoch {
+            // Update channels to mint UTXO
+            let (new_channels, minted_utxos) = self
+                .mantle_ledger
+                .channels()
+                .mint_frozen_notes(old_epoch)
+                .map_err(|e| LedgerError::Mantle(e.into()))?;
+            self.mantle_ledger = self.mantle_ledger.update_channels(new_channels);
+
+            // Insert UTXO in the Ledger BEFORE the cryptarchia snapshot
+            for utxo in minted_utxos {
+                self.cryptarchia_ledger.utxos =
+                    self.cryptarchia_ledger.utxos.insert(utxo.id(), utxo).0;
+            }
+        }
+
         let mut cryptarchia_ledger = self
             .cryptarchia_ledger
             .try_apply_header::<LeaderProof, Id>(slot, proof, config)?;
@@ -579,9 +598,11 @@ impl LedgerState {
                     tx_events.extend(events);
                 }
                 (Op::ChannelConfig(op), OpProof::ChannelMultiSigProof(sig)) => {
+                    let utxos = self.cryptarchia_ledger.latest_utxos();
                     let (result, events) = self.mantle_ledger.try_apply_channel_set_keys(
                         op,
                         sig,
+                        utxos,
                         &tx_hash,
                         self.cryptarchia_ledger.slot,
                     )?;
@@ -591,12 +612,14 @@ impl LedgerState {
                 (Op::ChannelDeposit(op), OpProof::ZkSig(sig)) => {
                     let channels = self.mantle_ledger.channels();
                     let locked_notes = self.mantle_ledger.locked_notes();
+                    let frozen_notes = self.mantle_ledger.frozen_notes();
                     let utxos = self.cryptarchia_ledger.latest_utxos();
 
                     // Validate the Deposit
                     op.validate(&DepositValidationContext {
                         channels,
                         locked_notes,
+                        frozen_notes,
                         utxos,
                         tx_hash: &tx_hash,
                         deposit_sig: sig,
@@ -633,6 +656,7 @@ impl LedgerState {
                         .execute(WithdrawExecutionContext {
                             channels: channels.clone(),
                             utxos: utxos.clone(),
+                            current_epoch: self.cryptarchia_ledger.epoch_state.epoch,
                         })
                         .map_err(mantle::Error::Channel)?;
                     self.mantle_ledger = self.mantle_ledger.update_channels(result.channels);
@@ -709,6 +733,7 @@ impl LedgerState {
                     (self.cryptarchia_ledger, transfer_balance, events) =
                         self.cryptarchia_ledger.try_apply_transfer::<_, Constants>(
                             self.mantle_ledger.locked_notes(),
+                            self.mantle_ledger.frozen_notes(),
                             op,
                             sig,
                             tx_hash,
@@ -963,6 +988,7 @@ mod tests {
             posting_timeout: 0.into(),
             configuration_threshold: 1,
             withdraw_threshold: 1,
+            sequencer_zk_pks: [ZkPublicKey::zero()].into(),
         };
 
         let config_tx = MantleTx([Op::ChannelConfig(config_op.clone())].into());
@@ -1043,7 +1069,7 @@ mod tests {
                 .channels
                 .get(&channel_id)
                 .unwrap()
-                .balance,
+                .solvency,
             utxo.note.value,
         );
         assert_eq!(balance, Balance::from(0));
@@ -1107,7 +1133,7 @@ mod tests {
                 .channels
                 .get(&channel_id)
                 .expect("channel_created")
-                .balance,
+                .solvency,
             utxo.note.value
         );
 
@@ -1148,7 +1174,7 @@ mod tests {
             .channels
             .get(&channel_id)
             .unwrap()
-            .balance;
+            .solvency;
         assert_eq!(channel_balance, utxo.note.value - withdraw_note.value);
         let withdraw_utxo = withdraw
             .outputs
@@ -1196,7 +1222,7 @@ mod tests {
             .channels
             .get(&channel_id)
             .unwrap()
-            .balance;
+            .solvency;
 
         // Try to withdraw some funds from the channel, but with an invalid proof
         let recipient_sk = ZkKey::from(BigUint::from(99u8));
@@ -1244,7 +1270,7 @@ mod tests {
             .channels
             .get(&channel_id)
             .unwrap()
-            .balance;
+            .solvency;
         assert_eq!(channel_balance_after_deposit, utxo.note.value);
         assert_eq!(
             channel_balance_after_deposit,
@@ -1413,6 +1439,7 @@ mod tests {
             posting_timeout: 0.into(),
             configuration_threshold: 1,
             withdraw_threshold: 1,
+            sequencer_zk_pks: [ZkPublicKey::new(Fr::from(0)), ZkPublicKey::new(Fr::from(1))].into(),
         };
 
         let inscribe_op3 = InscriptionOp {

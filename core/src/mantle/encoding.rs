@@ -927,6 +927,7 @@ mod tests {
                 posting_timeout: 2.into(),
                 configuration_threshold: 3,
                 withdraw_threshold: 4,
+                sequencer_zk_pks: [ZkPublicKey::zero()].into(),
             }),
         ]));
 
@@ -1138,6 +1139,7 @@ mod tests {
             posting_timeout: 0.into(),
             configuration_threshold: 0,
             withdraw_threshold: 0,
+            sequencer_zk_pks: [ZkPublicKey::zero()].into(),
         };
 
         let mantle_tx = MantleTx(Ops::new_unchecked(vec![Op::ChannelConfig(config_op)]));
@@ -1307,6 +1309,7 @@ mod tests {
             posting_timeout: 0.into(),
             configuration_threshold: 0,
             withdraw_threshold: 0,
+            sequencer_zk_pks: [ZkPublicKey::zero()].into(),
         };
 
         let blend_proof = ActivityProof {
@@ -1412,6 +1415,7 @@ mod tests {
             posting_timeout: 0.into(),
             configuration_threshold: 0,
             withdraw_threshold: 0,
+            sequencer_zk_pks: [ZkPublicKey::zero()].into(),
         };
 
         let locked_note_sk = ZkKey::from(BigUint::from(1u64));
@@ -1666,6 +1670,7 @@ mod tests {
                 posting_timeout: 0.into(),
                 configuration_threshold: 0,
                 withdraw_threshold: 0,
+                sequencer_zk_pks: [ZkPublicKey::zero()].into(),
             });
             u8::MAX as usize + 1
         ];
@@ -1765,13 +1770,27 @@ mod tests {
             posting_timeout: 0.into(),
             configuration_threshold: 0,
             withdraw_threshold: 0,
+            sequencer_zk_pks: [ZkPublicKey::zero()].into(),
         }
         .encode();
 
         assert_eq!(
             ChannelConfigOp::decode(&encoded_config_op).unwrap_err(),
             nom::Err::Error(Error {
-                input: &[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0][..],
+                // After the 2-byte key count [0, 0] is consumed, the remaining bytes are:
+                // posting_timeframe (4) + posting_timeout (4) + config_threshold (2) +
+                // withdraw_threshold (2) + ZkKeys count [1, 0] (2) + ZkPublicKey::zero() (32)
+                input: &[
+                    0, 0, 0, 0, // posting_timeframe
+                    0, 0, 0, 0, // posting_timeout
+                    0, 0, // configuration_threshold
+                    0, 0, // withdraw_threshold
+                    1, 0, // ZkKeys count = 1
+                    0, 0, 0, 0, 0, 0, 0, 0, // ZkPublicKey::zero()
+                    0, 0, 0, 0, 0, 0, 0, 0,
+                    0, 0, 0, 0, 0, 0, 0, 0,
+                    0, 0, 0, 0, 0, 0, 0, 0,
+                ][..],
                 code: ErrorKind::LengthValue,
             }),
         );

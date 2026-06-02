@@ -1,3 +1,4 @@
+use lb_cryptarchia_engine::Epoch;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -6,7 +7,7 @@ use crate::{
         TxHash,
         channel::{Channels, Error},
         encoding::encode_channel_withdraw,
-        ledger::{Operation, Outputs, Utxos},
+        ledger::{self, Operation, Outputs, Utxos},
         ops::{OpId, channel::ChannelId},
     },
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
@@ -34,6 +35,7 @@ pub struct WithdrawValidationContext<'a> {
 pub struct WithdrawExecutionContext {
     pub channels: Channels,
     pub utxos: Utxos,
+    pub current_epoch: Epoch,
 }
 
 impl Operation<WithdrawValidationContext<'_>> for ChannelWithdrawOp {
@@ -67,7 +69,7 @@ impl Operation<WithdrawValidationContext<'_>> for ChannelWithdrawOp {
 
         // Check that the channel has enough funds
         let amount = self.outputs.amount()?;
-        if amount > channel.balance {
+        if amount > channel.solvency {
             return Err(Error::InsufficientFunds);
         }
 
@@ -101,27 +103,74 @@ impl Operation<WithdrawValidationContext<'_>> for ChannelWithdrawOp {
         &self,
         mut ctx: Self::ExecutionContext<'_>,
     ) -> Result<(Self::ExecutionContext<'_>, Events), Self::Error> {
-        // Get the amount withdraw
+        // Get the amount to withdraw
         let amount_withdraw = self.outputs.amount()?;
 
-        // Decrease the balance of the channel and increase the withdrawal nonce
-        if let Some(channel) = ctx.channels.channels.get_mut(&self.channel_id) {
-            channel.balance = channel
-                .balance
-                .checked_sub(amount_withdraw)
-                .ok_or(Error::InsufficientFunds)?;
-            channel.withdrawal_nonce = channel
-                .withdrawal_nonce
-                .checked_add(1)
-                .ok_or(Error::WithdrawNonceOverflow)?;
-            Ok(self)
-        } else {
-            Err(Error::ChannelNotFound {
-                channel_id: self.channel_id,
-            })
-        }?;
+        let channel =
+            ctx.channels
+                .channels
+                .get_mut(&self.channel_id)
+                .ok_or(Error::ChannelNotFound {
+                    channel_id: self.channel_id,
+                })?;
 
-        // Add the ouputs to the ledger
+        // If the floating balance alone doesn't cover the withdrawal, release frozen
+        // notes epoch by epoch from the most recent one backward until it does.
+        // Each released note is removed from the frozen set and the UTXO tree, and
+        // its value is added back to the floating balance.
+        let mut epoch_number = ctx.current_epoch;
+        while amount_withdraw > channel.floating_balance {
+            for pk in channel.sequencers_zk_pks.iter() {
+                // Collect sequencers' note of the epoch_number
+                let key = (epoch_number, *pk);
+                if let Some(&note_id) = channel.frozen_note_map.get(&key) {
+                    // Unfreeze the note
+                    channel.frozen_note_map = channel.frozen_note_map.remove(&key);
+                    let note = ctx
+                        .channels
+                        .frozen_notes
+                        .unfreeze(&note_id)
+                        .map_err(Error::FrozenNotes)?;
+
+                    // Consume the note on the ledger
+                    (ctx.utxos, _) = ctx
+                        .utxos
+                        .remove(&note_id)
+                        .map_err(|_| Error::Inputs(ledger::InputsError::InexistingNote(note_id)))?;
+
+                    // Increase the floating balance
+                    channel.floating_balance = channel
+                        .floating_balance
+                        .checked_add(note.value)
+                        .ok_or(Error::BalanceOverflow)?;
+                }
+            }
+
+            // Decrease the epoch number and start again if it doesn't cover the withdrawal
+            // amount
+            epoch_number = Epoch::new(
+                epoch_number
+                    .into_inner()
+                    .checked_sub(1)
+                    .ok_or(Error::InsufficientFunds)?,
+            );
+        }
+
+        // Decrease the balance of the channel and increase the withdrawal nonce
+        channel.floating_balance = channel
+            .floating_balance
+            .checked_sub(amount_withdraw)
+            .ok_or(Error::InsufficientFunds)?;
+        channel.solvency = channel
+            .solvency
+            .checked_sub(amount_withdraw)
+            .ok_or(Error::InsufficientFunds)?;
+        channel.withdrawal_nonce = channel
+            .withdrawal_nonce
+            .checked_add(1)
+            .ok_or(Error::WithdrawNonceOverflow)?;
+
+        // Add the outputs to the ledger
         ctx.utxos = self.outputs.execute(ctx.utxos, self);
 
         Ok((ctx, Events::new()))

@@ -16,6 +16,7 @@ use crate::{
     events::Events,
     mantle::{
         encoding::{BoundedInputs, BoundedOutputs, NomInputs, decode_uint64, decode_zk_public_key},
+        frozen_notes::FrozenNotes,
         nom::{NomDecode, NomEncode},
         ops::OpId,
     },
@@ -45,6 +46,8 @@ pub enum InputsError {
     InexistingNote(NoteId),
     #[error("Locked note: {0:?}")]
     LockedNote(NoteId),
+    #[error("Frozen note: {0:?}")]
+    FrozenNote(NoteId),
     #[error("Inputs contain try to double spend the same NoteId")]
     DoubleSpend,
     #[error("Sum of input values overflows")]
@@ -213,7 +216,12 @@ impl Inputs {
         <&Self as IntoIterator>::into_iter(self)
     }
 
-    pub fn validate(&self, locked_notes: &LockedNotes, utxos: &Utxos) -> Result<(), InputsError> {
+    pub fn validate(
+        &self,
+        locked_notes: &LockedNotes,
+        frozen_notes: &FrozenNotes,
+        utxos: &Utxos,
+    ) -> Result<(), InputsError> {
         // Check that there is no duplicate
         let unique: HashSet<_> = self.0.iter().collect();
         if unique.len() != self.0.len() {
@@ -224,6 +232,10 @@ impl Inputs {
             // Check the note isn't locked
             if locked_notes.contains(input) {
                 return Err(InputsError::LockedNote(*input));
+            }
+            // Check the note isn't frozen
+            if frozen_notes.contains(input) {
+                return Err(InputsError::FrozenNote(*input));
             }
             // Check the note exist in the ledger
             if !utxos.contains(input) {

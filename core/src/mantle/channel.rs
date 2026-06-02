@@ -1,18 +1,21 @@
 use std::sync::Arc;
 
-use lb_cryptarchia_engine::Slot;
+use lb_cryptarchia_engine::{Epoch, Slot};
+use lb_key_management_system_keys::keys::ZkPublicKey;
 use nom::{IResult, Parser as _, combinator::map};
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    crypto::{Digest as _, Hash, Hasher},
     events::Events,
     mantle::{
-        Value,
+        Note, NoteId, Utxo, Value,
+        frozen_notes::{self, FrozenNotes},
         ledger::{self, Operation as _},
         nom::{NomDecode, NomEncode},
         ops::channel::{
             ChannelId, ChannelKeyIndex, MsgId,
-            config::Keys,
+            config::{Keys, ZkKeys},
             inscribe::{InscriptionExecutionContext, InscriptionOp},
         },
     },
@@ -115,6 +118,8 @@ pub enum Error {
     Inputs(#[from] ledger::InputsError),
     #[error("Outputs error: {0}")]
     Outputs(#[from] ledger::OutputsError),
+    #[error("Frozen notes error: {0}")]
+    FrozenNotes(#[from] frozen_notes::Error),
     #[error(
         "Invalid number of signatures (treshold:?) for channel {channel_id:?}, expected {actual:?}"
     )]
@@ -128,6 +133,8 @@ pub enum Error {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Channels {
     pub channels: rpds::HashTrieMapSync<ChannelId, ChannelState>,
+    pub mint_eligible_channels: Vec<ChannelId>,
+    pub frozen_notes: FrozenNotes,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -150,7 +157,10 @@ pub struct ChannelState {
     pub posting_timeout: SlotTimeout,     // number of slots (0 = no timeout)
 
     // Bridging
-    pub balance: Value,
+    pub floating_balance: Value,
+    pub solvency: Value,
+    pub frozen_note_map: rpds::HashTrieMapSync<(Epoch, ZkPublicKey), NoteId>,
+    pub sequencers_zk_pks: Arc<ZkKeys>,
     pub withdrawal_nonce: u32,
     pub withdraw_threshold: ChannelKeyIndex, /* indicating how many keys are required to
                                               * withdraw
@@ -178,16 +188,76 @@ impl Channels {
     pub fn new() -> Self {
         Self {
             channels: rpds::HashTrieMapSync::new_sync(),
+            mint_eligible_channels: vec![],
+            frozen_notes: FrozenNotes::new(),
         }
+    }
+
+    pub fn mint_frozen_notes(&self, epoch: Epoch) -> Result<(Self, Vec<Utxo>), Error> {
+        let mut channels = self.clone();
+        let mut minted_utxos = Vec::new();
+
+        for channel_id in &self.mint_eligible_channels {
+            if let Some(channel) = channels.channels.get_mut(channel_id) {
+                let num_sequencers = channel.sequencers_zk_pks.len();
+                let note_value = channel.floating_balance / num_sequencers as Value;
+
+                if num_sequencers > 0 && note_value > 0 {
+                    channel.floating_balance -= note_value * num_sequencers as Value;
+
+                    // Get the replacement of the op_id
+                    let op_id: Hash = {
+                        let mut hasher = Hasher::new();
+                        hasher.update(b"CHANNEL_BRIDGE_NOTES");
+                        hasher.update(channel_id.as_ref());
+                        hasher.update(epoch.into_inner().to_le_bytes());
+                        hasher.finalize().into()
+                    };
+
+                    for (idx, pk) in channel.sequencers_zk_pks.iter().enumerate() {
+                        let note = Note::new(note_value, *pk);
+                        let utxo = Utxo::new(op_id, idx, note);
+                        let note_id = utxo.id();
+
+                        channels.frozen_notes = channels
+                            .frozen_notes
+                            .freeze(note, &note_id)
+                            .map_err(Error::FrozenNotes)?;
+
+                        channel.frozen_note_map =
+                            channel.frozen_note_map.insert((epoch, *pk), note_id);
+
+                        minted_utxos.push(utxo);
+                    }
+                }
+            }
+        }
+
+        channels.mint_eligible_channels.clear();
+
+        Ok((channels, minted_utxos))
     }
 
     #[must_use]
     pub fn channel_state(&self, channel_id: &ChannelId) -> Option<&ChannelState> {
         self.channels.get(channel_id)
     }
+
+    #[must_use]
+    pub const fn frozen_notes(&self) -> &FrozenNotes {
+        &self.frozen_notes
+    }
 }
 
 impl ChannelState {
+    #[must_use]
+    pub fn last_mint_epoch(&self) -> Option<Epoch> {
+        self.frozen_note_map
+            .iter()
+            .map(|((epoch, _), _)| *epoch)
+            .max()
+    }
+
     // Returns the new sequencer index and its starting slot
     #[must_use]
     pub fn round_robin(&self, block_slot: Slot) -> (u16, Slot) {
@@ -228,15 +298,15 @@ impl ChannelState {
 mod tests {
     use ark_ff::Field as _;
     use lb_groth16::Fr;
-    use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey, ZkPublicKey};
+    use lb_key_management_system_keys::keys::{Ed25519Key, UnsecuredZkKey, ZkKey};
     use lb_utils::blake_rng::RngCore as _;
     use rand::thread_rng;
+    use rpds::HashTrieMapSync;
 
     use super::*;
     use crate::{
         events::{Event, EventPayload},
         mantle::{
-            Note, Utxo,
             ledger::{Outputs, Utxos},
             ops::{
                 OpId as _,
@@ -255,6 +325,10 @@ mod tests {
         Ed25519Key::from_bytes(&[seed; 32]).public_key()
     }
 
+    fn test_public_zk_key(seed: u8) -> ZkPublicKey {
+        UnsecuredZkKey::new(Fr::from(seed)).to_public_key()
+    }
+
     fn make_channel(
         tip_slot: u64,
         tip_sequencer: u16,
@@ -269,7 +343,14 @@ mod tests {
             tip_sequencer_starting_slot: Slot::new(tip_sequencer_starting_slot),
             posting_timeframe: SlotTimeframe(posting_timeframe),
             posting_timeout: SlotTimeout(posting_timeout),
-            balance: 0,
+            floating_balance: 0,
+            solvency: 0,
+            frozen_note_map: HashTrieMapSync::new_sync(),
+            sequencers_zk_pks: ZkKeys::try_from(
+                (0..num_keys).map(test_public_zk_key).collect::<Vec<_>>(),
+            )
+            .unwrap()
+            .into(),
             withdrawal_nonce: 0,
             accredited_keys: Keys::try_from((0..num_keys).map(test_public_key).collect::<Vec<_>>())
                 .unwrap()
@@ -304,7 +385,7 @@ mod tests {
         #[must_use]
         pub fn with_balance(channel_id: ChannelId, balance: Value) -> Self {
             Self {
-                channels: rpds::HashTrieMapSync::new_sync().insert(
+                channels: HashTrieMapSync::new_sync().insert(
                     channel_id,
                     ChannelState {
                         accredited_keys: Keys::from(test_public_key(7)).into(),
@@ -314,12 +395,17 @@ mod tests {
                         tip_sequencer: 0,
                         tip_sequencer_starting_slot: Slot::default(),
                         posting_timeframe: 0u32.into(),
-                        balance,
                         withdraw_threshold: 1,
                         withdrawal_nonce: 0,
                         posting_timeout: 0u32.into(),
+                        floating_balance: balance,
+                        solvency: balance,
+                        frozen_note_map: HashTrieMapSync::new_sync(),
+                        sequencers_zk_pks: ZkKeys::from(test_public_zk_key(7)).into(),
                     },
                 ),
+                mint_eligible_channels: vec![],
+                frozen_notes: FrozenNotes::new(),
             }
         }
     }
@@ -331,7 +417,7 @@ mod tests {
         let missing_id = ChannelId::from([0u8; 32]);
 
         let channels = Channels {
-            channels: rpds::HashTrieMapSync::new_sync()
+            channels: HashTrieMapSync::new_sync()
                 .insert(
                     first_id,
                     ChannelState {
@@ -342,10 +428,13 @@ mod tests {
                         tip_sequencer: 0,
                         tip_sequencer_starting_slot: Slot::default(),
                         posting_timeframe: 0u32.into(),
-                        balance: 5,
                         withdraw_threshold: 1,
                         withdrawal_nonce: 0,
                         posting_timeout: 0u32.into(),
+                        floating_balance: 5,
+                        solvency: 5,
+                        frozen_note_map: HashTrieMapSync::new_sync(),
+                        sequencers_zk_pks: ZkKeys::from(test_public_zk_key(11)).into(),
                     },
                 )
                 .insert(
@@ -359,12 +448,21 @@ mod tests {
                         tip_sequencer: 0,
                         tip_sequencer_starting_slot: Slot::default(),
                         posting_timeframe: 0.into(),
-                        balance: 9,
                         withdraw_threshold: 2,
                         withdrawal_nonce: 0,
                         posting_timeout: 0.into(),
+                        floating_balance: 9,
+                        solvency: 9,
+                        frozen_note_map: HashTrieMapSync::new_sync(),
+                        sequencers_zk_pks: ZkKeys::from([
+                            test_public_zk_key(22),
+                            test_public_zk_key(23),
+                        ])
+                        .into(),
                     },
                 ),
+            mint_eligible_channels: vec![],
+            frozen_notes: FrozenNotes::new(),
         };
 
         let gas_context = MantleTxGasContext::from_channels(&channels, GasPrices::new(0, 0));
@@ -399,7 +497,11 @@ mod tests {
             .expect("execution should succeed");
 
         assert_eq!(
-            updated.channels.channel_state(&channel_id).unwrap().balance,
+            updated
+                .channels
+                .channel_state(&channel_id)
+                .unwrap()
+                .solvency,
             16
         );
 
@@ -446,11 +548,16 @@ mod tests {
             .execute(WithdrawExecutionContext {
                 channels,
                 utxos: utxo_tree,
+                current_epoch: 0.into(),
             })
             .expect("execution should succeed");
 
         assert_eq!(
-            updated.channels.channel_state(&channel_id).unwrap().balance,
+            updated
+                .channels
+                .channel_state(&channel_id)
+                .unwrap()
+                .solvency,
             4
         );
         assert!(events.is_empty());
@@ -477,6 +584,7 @@ mod tests {
         let result = withdraw_op.execute(WithdrawExecutionContext {
             channels,
             utxos: utxo_tree,
+            current_epoch: 0.into(),
         });
 
         assert!(matches!(result, Err(Error::InsufficientFunds)));
@@ -502,6 +610,7 @@ mod tests {
         let result = withdraw_op.execute(WithdrawExecutionContext {
             channels,
             utxos: utxo_tree,
+            current_epoch: 0.into(),
         });
 
         assert!(matches!(result, Err(Error::ChannelNotFound { .. })));

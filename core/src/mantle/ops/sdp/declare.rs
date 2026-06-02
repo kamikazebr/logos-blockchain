@@ -5,6 +5,7 @@ use crate::{
     events::Events,
     mantle::{
         Note, TxHash,
+        frozen_notes::FrozenNotes,
         ledger::{Declarations, Operation, Utxos},
     },
     sdp::{Declaration, MinStake, locked_notes::LockedNotes},
@@ -16,6 +17,7 @@ trait SDPDeclareValidationExt {
         note: Note,
         declarations: &Declarations,
         locked_notes: &LockedNotes,
+        frozen_notes: &FrozenNotes,
         min_stake: &MinStake,
     ) -> Result<(), SdpError>;
 
@@ -31,6 +33,7 @@ impl SDPDeclareValidationExt for SDPDeclareOp {
         note: Note,
         declarations: &Declarations,
         locked_notes: &LockedNotes,
+        frozen_notes: &FrozenNotes,
         min_stake: &MinStake,
     ) -> Result<(), SdpError> {
         // Check that the declaration doesn't already exist
@@ -41,6 +44,13 @@ impl SDPDeclareValidationExt for SDPDeclareOp {
         // Ensure it has no more than 8 locators.
         if self.locators.len() > MAX_DECLARATION_LOCATOR {
             return Err(SdpError::TooMuchLocators);
+        }
+
+        // Ensure the note isn't frozen
+        if frozen_notes.contains(&self.locked_note_id) {
+            return Err(SdpError::NoteFrozen {
+                note_id: self.locked_note_id,
+            });
         }
 
         // Ensure value of locked note is sufficient for joining the service.
@@ -93,6 +103,7 @@ impl SDPDeclareValidationExt for SDPDeclareOp {
 pub struct SDPDeclareValidationContext<'a> {
     pub utxo_tree: &'a Utxos,
     pub locked_notes: &'a LockedNotes,
+    pub frozen_notes: &'a FrozenNotes,
     pub tx_hash: &'a TxHash,
     pub declare_zk_sig: &'a ZkSignature,
     pub declare_eddsa_sig: &'a Ed25519Signature,
@@ -103,6 +114,7 @@ pub struct SDPDeclareValidationContext<'a> {
 pub struct SDPDeclareGenesisValidationContext<'a> {
     pub utxo_tree: &'a Utxos,
     pub locked_notes: &'a LockedNotes,
+    pub frozen_notes: &'a FrozenNotes,
     pub declarations: &'a Declarations,
     pub min_stake: &'a MinStake,
 }
@@ -152,6 +164,7 @@ impl Operation<SDPDeclareValidationContext<'_>> for SDPDeclareOp {
             note,
             ctx.declarations,
             ctx.locked_notes,
+            ctx.frozen_notes,
             ctx.min_stake,
         )
     }
@@ -183,6 +196,7 @@ impl Operation<SDPDeclareGenesisValidationContext<'_>> for SDPDeclareOp {
             note,
             ctx.declarations,
             ctx.locked_notes,
+            ctx.frozen_notes,
             ctx.min_stake,
         )
     }

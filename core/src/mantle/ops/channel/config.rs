@@ -1,5 +1,6 @@
-use lb_cryptarchia_engine::Slot;
-use lb_utils::bounded_vec::NonEmptyBoundedVec;
+use lb_cryptarchia_engine::{Epoch, Slot};
+use lb_key_management_system_keys::keys::ZkPublicKey;
+use lb_utils::bounded_vec::{NonEmptyBoundedVec, UpperBoundedVec};
 use nom::IResult;
 use serde::{Deserialize, Serialize};
 
@@ -10,7 +11,8 @@ use crate::{
     mantle::{
         TxHash,
         channel::{ChannelState, Channels, Error, SlotTimeframe, SlotTimeout},
-        ledger::Operation,
+        ledger,
+        ledger::{Operation, Utxos},
         nom::{NomBoundedVec, NomDecode, NomEncode},
     },
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
@@ -18,7 +20,9 @@ use crate::{
 
 pub const CHANNEL_MAX_KEYS: usize = u16::MAX as usize;
 pub type Keys = NonEmptyBoundedVec<Ed25519PublicKey, CHANNEL_MAX_KEYS>;
+pub type ZkKeys = UpperBoundedVec<ZkPublicKey, CHANNEL_MAX_KEYS>;
 type NomKeys<'a> = NomBoundedVec<'a, Ed25519PublicKey, { Keys::MIN }, { Keys::MAX }, 2>;
+type NomZkKeys<'a> = NomBoundedVec<'a, ZkPublicKey, { ZkKeys::MIN }, { ZkKeys::MAX }, 2>;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct ChannelConfigOp {
@@ -28,6 +32,7 @@ pub struct ChannelConfigOp {
     pub posting_timeout: SlotTimeout,
     pub configuration_threshold: u16,
     pub withdraw_threshold: u16,
+    pub sequencer_zk_pks: ZkKeys,
 }
 
 impl ChannelConfigOp {
@@ -40,7 +45,7 @@ impl ChannelConfigOp {
 }
 
 // ChannelConfig = ChannelId KeyCount *Ed25519PublicKey PostingTimeframe
-// PostingTimeout ConfigThreshold WithdrawThreshold
+// PostingTimeout ConfigThreshold WithdrawThreshold *ZkPublicKey
 impl NomEncode for ChannelConfigOp {
     fn encode(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
@@ -50,6 +55,7 @@ impl NomEncode for ChannelConfigOp {
         bytes.extend(self.posting_timeout.encode());
         bytes.extend(self.configuration_threshold.encode());
         bytes.extend(self.withdraw_threshold.encode());
+        bytes.extend(NomZkKeys::from(&self.sequencer_zk_pks).encode());
         bytes
     }
 }
@@ -64,6 +70,7 @@ impl NomDecode for ChannelConfigOp {
         let (bytes, posting_timeout) = SlotTimeout::decode(bytes)?;
         let (bytes, configuration_threshold) = u16::decode(bytes)?;
         let (bytes, withdraw_threshold) = u16::decode(bytes)?;
+        let (bytes, sequencer_zk_pks) = NomZkKeys::decode(bytes)?;
 
         Ok((
             bytes,
@@ -74,6 +81,7 @@ impl NomDecode for ChannelConfigOp {
                 posting_timeout,
                 configuration_threshold,
                 withdraw_threshold,
+                sequencer_zk_pks,
             },
         ))
     }
@@ -88,6 +96,7 @@ pub struct ChannelConfigValidationContext<'a> {
 pub struct ChannelConfigExecutionContext {
     pub channels: Channels,
     pub block_slot: Slot,
+    pub utxos: Utxos,
 }
 
 impl Operation<ChannelConfigValidationContext<'_>> for ChannelConfigOp {
@@ -102,7 +111,10 @@ impl Operation<ChannelConfigValidationContext<'_>> for ChannelConfigOp {
         // index. This is enforced by the proof structure that enforces it.
 
         // Check config wellformness
-        if self.configuration_threshold == 0 || self.withdraw_threshold == 0 || self.keys.is_empty()
+        if self.configuration_threshold == 0
+            || self.withdraw_threshold == 0
+            || self.keys.is_empty()
+            || self.keys.len() != self.sequencer_zk_pks.len()
         {
             return Err(Error::InvalidChannelConfig);
         }
@@ -145,6 +157,47 @@ impl Operation<ChannelConfigValidationContext<'_>> for ChannelConfigOp {
     ) -> Result<(Self::ExecutionContext<'_>, Events), Self::Error> {
         // if the channel doesn't exist, create it otherwise just update the config
         if let Some(channel) = ctx.channels.channels.get_mut(&self.channel) {
+            // Get the list of removed sequencers
+            let removed_sequencers: Vec<&ZkPublicKey> = channel
+                .sequencers_zk_pks
+                .iter()
+                .filter(|pk| !self.sequencer_zk_pks.as_slice().contains(pk))
+                .collect();
+
+            // Collect (Epoch, ZkPublicKey) keys whose sequencer was removed
+            let entries_to_remove: Vec<(Epoch, ZkPublicKey)> = channel
+                .frozen_note_map
+                .iter()
+                .filter(|((_, zk_pk), _)| removed_sequencers.contains(&zk_pk))
+                .map(|(key, _)| *key)
+                .collect();
+
+            for key in entries_to_remove {
+                // Pop from frozen_note_map
+                let note_id = channel
+                    .frozen_note_map
+                    .get(&key)
+                    .copied()
+                    .expect("key was just collected from this map");
+                channel.frozen_note_map = channel.frozen_note_map.remove(&key);
+
+                // Unfreeze
+                let note = ctx.channels.frozen_notes.unfreeze(&note_id)?;
+
+                // remove from UTXO tree
+                (ctx.utxos, _) = ctx
+                    .utxos
+                    .remove(&note_id)
+                    .map_err(|_| Error::Inputs(ledger::InputsError::InexistingNote(note_id)))?;
+
+                // Credit value back to the floating balance
+                channel.floating_balance = channel
+                    .floating_balance
+                    .checked_add(note.value)
+                    .ok_or(Error::BalanceOverflow)?;
+            }
+
+            // Update the channel
             channel.accredited_keys = self.keys.clone().into();
             channel.configuration_threshold = self.configuration_threshold;
             channel.tip_sequencer = 0;
@@ -154,6 +207,7 @@ impl Operation<ChannelConfigValidationContext<'_>> for ChannelConfigOp {
             channel.withdraw_threshold = self.withdraw_threshold;
             channel.tip_slot = ctx.block_slot;
             channel.tip_message = self.id();
+            channel.sequencers_zk_pks = self.sequencer_zk_pks.clone().into();
         } else {
             ctx.channels.channels = ctx.channels.channels.insert(
                 self.channel,
@@ -165,7 +219,10 @@ impl Operation<ChannelConfigValidationContext<'_>> for ChannelConfigOp {
                     tip_sequencer: 0,
                     tip_sequencer_starting_slot: ctx.block_slot,
                     posting_timeframe: self.posting_timeframe.clone(),
-                    balance: 0,
+                    floating_balance: 0,
+                    solvency: 0,
+                    frozen_note_map: rpds::HashTrieMapSync::default(),
+                    sequencers_zk_pks: self.sequencer_zk_pks.clone().into(),
                     withdraw_threshold: self.withdraw_threshold,
                     withdrawal_nonce: 0,
                     posting_timeout: self.posting_timeout.clone(),

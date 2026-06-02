@@ -37,6 +37,8 @@ pub enum SdpError {
         note_id: NoteId,
         service_type: ServiceType,
     },
+    #[error("Note {note_id:?} frozen")]
+    NoteFrozen { note_id: NoteId },
     #[error(
         "An unexpected error occurred during sdp declare execution, please validate the op before executing"
     )]

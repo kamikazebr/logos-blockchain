@@ -8,6 +8,7 @@ use lb_core::{
     events::Events,
     mantle::{
         NoteId, OpProof, TxHash, Utxo, Value,
+        frozen_notes::FrozenNotes,
         ledger::Operation,
         ops::sdp::{
             SDPActiveExecutionContext, SDPActiveOp, SDPActiveValidationContext,
@@ -307,7 +308,8 @@ impl SdpLedger {
 
         let mut all_events = Events::new();
         for (op, _) in ops {
-            let (result, events) = sdp.try_apply_genesis_sdp_declaration(utxo_tree, op, config)?;
+            let (result, events) =
+                sdp.try_apply_genesis_sdp_declaration(utxo_tree, &FrozenNotes::new(), op, config)?;
             sdp = result;
             all_events.extend(events);
         }
@@ -395,6 +397,7 @@ impl SdpLedger {
     pub fn try_apply_genesis_sdp_declaration(
         mut self,
         utxo_tree: &UtxoTree,
+        frozen_notes: &FrozenNotes,
         op: &SDPDeclareOp,
         config: &Config,
     ) -> Result<(Self, Events), Error> {
@@ -406,6 +409,7 @@ impl SdpLedger {
         op.validate(&SDPDeclareGenesisValidationContext {
             utxo_tree,
             locked_notes: &self.locked_notes,
+            frozen_notes,
             declarations: service_state.declarations(),
             min_stake: &config.min_stake,
         })?;
@@ -431,6 +435,7 @@ impl SdpLedger {
     pub fn try_apply_sdp_declaration(
         mut self,
         utxo_tree: &UtxoTree,
+        frozen_notes: &FrozenNotes,
         op: &SDPDeclareOp,
         zk_sig: &ZkSignature,
         ed25519_sig: &Ed25519Signature,
@@ -445,6 +450,7 @@ impl SdpLedger {
         op.validate(&SDPDeclareValidationContext {
             utxo_tree,
             locked_notes: &self.locked_notes,
+            frozen_notes,
             tx_hash: &tx_hash,
             declare_zk_sig: zk_sig,
             declare_eddsa_sig: ed25519_sig,
@@ -714,6 +720,7 @@ mod tests {
 
     fn apply_declare_with_dummies(
         utxos: &Utxos,
+        frozen_notes: &FrozenNotes,
         sdp_ledger: SdpLedger,
         op: &SDPDeclareOp,
         zk_sk: &ZkKey,
@@ -727,7 +734,15 @@ mod tests {
         let ed25519_sig = signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref());
 
         sdp_ledger
-            .try_apply_sdp_declaration(utxos, op, &zk_sig, &ed25519_sig, tx_hash, config)
+            .try_apply_sdp_declaration(
+                utxos,
+                frozen_notes,
+                op,
+                &zk_sig,
+                &ed25519_sig,
+                tx_hash,
+                config,
+            )
             .map(|(sdp_ledger, _)| sdp_ledger)
     }
 
@@ -782,8 +797,15 @@ mod tests {
 
         // Apply declare at block 0
         let utxo_tree = utxo_tree(vec![utxo]);
-        let sdp_ledger =
-            apply_declare_with_dummies(&utxo_tree, sdp_ledger, op, &zk_key, &config).unwrap();
+        let sdp_ledger = apply_declare_with_dummies(
+            &utxo_tree,
+            &FrozenNotes::new(),
+            sdp_ledger,
+            op,
+            &zk_key,
+            &config,
+        )
+        .unwrap();
 
         // Declaration is in service_state.declarations but not in sessions yet
         let declarations = sdp_ledger.get_declarations(service_a).unwrap();
@@ -826,9 +848,15 @@ mod tests {
             SdpLedger::new().with_blend_service(&config.service_rewards_params.blend, &epoch_state);
 
         let utxo_tree = utxo_tree(vec![utxo]);
-        let sdp_ledger =
-            apply_declare_with_dummies(&utxo_tree, sdp_ledger, declare_op, &zk_key, &config)
-                .unwrap();
+        let sdp_ledger = apply_declare_with_dummies(
+            &utxo_tree,
+            &FrozenNotes::new(),
+            sdp_ledger,
+            declare_op,
+            &zk_key,
+            &config,
+        )
+        .unwrap();
 
         // Verify declaration is present
         let declarations = sdp_ledger.get_declarations(service_a).unwrap();
@@ -880,8 +908,15 @@ mod tests {
 
         // Declare at block 0
         let utxo_tree = utxo_tree(vec![utxo]);
-        let sdp_ledger =
-            apply_declare_with_dummies(&utxo_tree, sdp_ledger, op, &zk_key, &config).unwrap();
+        let sdp_ledger = apply_declare_with_dummies(
+            &utxo_tree,
+            &FrozenNotes::new(),
+            sdp_ledger,
+            op,
+            &zk_key,
+            &config,
+        )
+        .unwrap();
 
         // Apply headers to reach block 10 (session boundary for session_duration=10)
         let mut sdp_ledger = sdp_ledger;
@@ -987,9 +1022,15 @@ mod tests {
         let declaration_id = declare_op.id();
 
         let utxo_tree = utxo_tree(vec![utxo]);
-        sdp_ledger =
-            apply_declare_with_dummies(&utxo_tree, sdp_ledger, declare_op, &zk_key, &config)
-                .unwrap();
+        sdp_ledger = apply_declare_with_dummies(
+            &utxo_tree,
+            &FrozenNotes::new(),
+            sdp_ledger,
+            declare_op,
+            &zk_key,
+            &config,
+        )
+        .unwrap();
 
         // Move to block 9 (last block of session 0)
         for _ in 6..10 {
@@ -1056,9 +1097,15 @@ mod tests {
         let declaration_id_1 = declare_op_1.id();
 
         let utxo_tree_1 = utxo_tree(vec![utxo_1]);
-        sdp_ledger =
-            apply_declare_with_dummies(&utxo_tree_1, sdp_ledger, declare_op_1, &zk_key_1, &config)
-                .unwrap();
+        sdp_ledger = apply_declare_with_dummies(
+            &utxo_tree_1,
+            &FrozenNotes::new(),
+            sdp_ledger,
+            declare_op_1,
+            &zk_key_1,
+            &config,
+        )
+        .unwrap();
 
         // Move to block 9 (last block before session boundary)
         for _ in 1..10 {
@@ -1084,9 +1131,15 @@ mod tests {
         let declaration_id_2 = declare_op_2.id();
 
         let utxo_tree_2 = utxo_tree(vec![utxo_1, utxo_2]);
-        sdp_ledger =
-            apply_declare_with_dummies(&utxo_tree_2, sdp_ledger, declare_op_2, &zk_key_2, &config)
-                .unwrap();
+        sdp_ledger = apply_declare_with_dummies(
+            &utxo_tree_2,
+            &FrozenNotes::new(),
+            sdp_ledger,
+            declare_op_2,
+            &zk_key_2,
+            &config,
+        )
+        .unwrap();
 
         // Jump to session 2 (block 20)
         for _ in 11..20 {
@@ -1152,9 +1205,15 @@ mod tests {
         let declaration_id = declare_op.id();
 
         let utxo_tree = utxo_tree(vec![utxo]);
-        sdp_ledger =
-            apply_declare_with_dummies(&utxo_tree, sdp_ledger, declare_op, &zk_key, &config)
-                .unwrap();
+        sdp_ledger = apply_declare_with_dummies(
+            &utxo_tree,
+            &FrozenNotes::new(),
+            sdp_ledger,
+            declare_op,
+            &zk_key,
+            &config,
+        )
+        .unwrap();
 
         // Jump directly from block 3 to block 25 (skipping session 1 entirely)
         for _ in 4..25 {
@@ -1216,9 +1275,15 @@ mod tests {
         let declaration_id_1 = declare_op_1.id();
 
         let utxo_tree_1 = utxo_tree(vec![utxo_1]);
-        sdp_ledger =
-            apply_declare_with_dummies(&utxo_tree_1, sdp_ledger, declare_op_1, &zk_key_1, &config)
-                .unwrap();
+        sdp_ledger = apply_declare_with_dummies(
+            &utxo_tree_1,
+            &FrozenNotes::new(),
+            sdp_ledger,
+            declare_op_1,
+            &zk_key_1,
+            &config,
+        )
+        .unwrap();
 
         // Cross to block 10 (session boundary - start of session 1)
         // At this point, the snapshot for next session 2 is taken
@@ -1247,9 +1312,15 @@ mod tests {
         let declaration_id_2 = declare_op_2.id();
 
         let utxo_tree_2 = utxo_tree(vec![utxo_1, utxo_2]);
-        sdp_ledger =
-            apply_declare_with_dummies(&utxo_tree_2, sdp_ledger, declare_op_2, &zk_key_2, &config)
-                .unwrap();
+        sdp_ledger = apply_declare_with_dummies(
+            &utxo_tree_2,
+            &FrozenNotes::new(),
+            sdp_ledger,
+            declare_op_2,
+            &zk_key_2,
+            &config,
+        )
+        .unwrap();
 
         // Next session 2 still only has declaration_1 (snapshot was already taken at
         // block 10)

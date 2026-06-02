@@ -14,6 +14,7 @@ pub mod select;
 pub mod tx;
 pub mod tx_builder;
 
+pub mod frozen_notes;
 mod nom;
 
 pub use gas::{GasCalculator, GasConstants};

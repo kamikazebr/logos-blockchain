@@ -17,7 +17,7 @@ use lb_core::{
             Op, OpId as _, OpProof,
             channel::{
                 ChannelId, ChannelKeyIndex, MsgId,
-                config::{ChannelConfigOp, Keys},
+                config::{ChannelConfigOp, Keys, ZkKeys},
                 inscribe::{Inscription, InscriptionOp},
                 withdraw::ChannelWithdrawOp,
             },
@@ -397,6 +397,7 @@ enum ActorRequest {
         posting_timeout: SlotTimeout,
         configuration_threshold: u16,
         withdraw_threshold: u16,
+        zkkeys: ZkKeys,
         reply: tokio::sync::oneshot::Sender<Result<(SignedMantleTx, PublishResult), Error>>,
     },
     /// Publish an atomic inscription+withdraw bundle.
@@ -587,6 +588,7 @@ where
         posting_timeout: SlotTimeout,
         configuration_threshold: u16,
         withdraw_threshold: u16,
+        zkkeys: ZkKeys,
     ) -> Result<(PublishResult, impl Future<Output = Result<(), Error>>), Error> {
         // Subscribe BEFORE submitting to avoid missing finalization events.
         let mut event_rx = self.event_tx.subscribe();
@@ -598,6 +600,7 @@ where
             posting_timeout,
             configuration_threshold,
             withdraw_threshold,
+            zkkeys,
             reply: reply_tx,
         };
 
@@ -1721,6 +1724,7 @@ where
                 posting_timeout,
                 configuration_threshold,
                 withdraw_threshold,
+                zkkeys,
                 reply,
             } => {
                 // Safe to unwrap — is_ready() guarantees state is initialized
@@ -1733,6 +1737,7 @@ where
                     posting_timeout,
                     configuration_threshold,
                     withdraw_threshold,
+                    zkkeys,
                 );
                 s.submit_other(signed_tx.clone());
                 let result = PublishResult {
@@ -2651,6 +2656,7 @@ fn create_channel_config_tx(
     posting_timeout: SlotTimeout,
     configuration_threshold: u16,
     withdraw_threshold: u16,
+    sequencer_zk_pks: ZkKeys,
 ) -> SignedMantleTx {
     let config_op = ChannelConfigOp {
         channel: channel_id,
@@ -2659,6 +2665,7 @@ fn create_channel_config_tx(
         posting_timeout,
         configuration_threshold,
         withdraw_threshold,
+        sequencer_zk_pks,
     };
 
     // TODO: fund tx
@@ -2728,9 +2735,10 @@ mod tests {
         proofs::leader_proof::Groth16LeaderProof,
     };
     use lb_http_api_common::queries::BlocksStreamQuery;
-    use lb_key_management_system_service::keys::ZkKey;
+    use lb_key_management_system_service::keys::{ZkKey, ZkPublicKey};
     use num_bigint::BigUint;
     use rand::{RngCore as _, thread_rng};
+    use rpds::HashTrieMapSync;
 
     use super::*;
     use crate::ZoneMessage;
@@ -3039,7 +3047,10 @@ mod tests {
                         tip_sequencer_starting_slot: Slot::default(),
                         posting_timeframe: 0u32.into(),
                         posting_timeout: 0u32.into(),
-                        balance: 0,
+                        floating_balance: 0,
+                        solvency: 0,
+                        frozen_note_map: HashTrieMapSync::default(),
+                        sequencers_zk_pks: ZkKeys::from([ZkPublicKey::zero()]).into(),
                         withdrawal_nonce: 0,
                         withdraw_threshold: 1,
                     }),
@@ -3434,9 +3445,12 @@ mod tests {
             tip_sequencer_starting_slot: Slot::default(),
             posting_timeframe: 0u32.into(),
             posting_timeout: 0u32.into(),
-            balance: 0,
+            floating_balance: 0,
+            solvency: 0,
+            frozen_note_map: HashTrieMapSync::default(),
             withdrawal_nonce: 0,
             withdraw_threshold: 1,
+            sequencers_zk_pks: ZkKeys::from([ZkPublicKey::zero()]).into(),
         });
 
         let node = ColdStartMockNode {
