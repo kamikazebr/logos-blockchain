@@ -108,10 +108,45 @@ impl Operation<TransferValidationContext<'_>> for TransferOp {
 #[cfg(test)]
 mod test {
     use lb_poseidon2::Fr;
+    use lb_key_management_system_keys::keys::UnsecuredZkKey;
     use num_bigint::BigUint;
 
     use super::*;
-    use crate::mantle::{Note, NoteId, Utxo};
+    use crate::mantle::{
+        Note, NoteId, Utxo,
+        frozen_notes::FrozenNotes,
+        ledger::{InputsError, Utxos},
+    };
+    use crate::sdp::locked_notes::LockedNotes;
+
+    fn make_utxo(value: u64) -> Utxo {
+        let pk = UnsecuredZkKey::new(Fr::from(0u64)).to_public_key();
+        Utxo::new([0u8; 32], 0, Note::new(value, pk))
+    }
+
+    fn utxo_tree(utxos: Vec<Utxo>) -> Utxos {
+        let mut tree = Utxos::new();
+        for u in utxos {
+            (tree, _) = tree.insert(u.id(), u);
+        }
+        tree
+    }
+
+    #[test]
+    fn frozen_note_rejected_as_transfer_input() {
+        let utxo = make_utxo(10);
+        let note_id = utxo.id();
+        let utxos = utxo_tree(vec![utxo.clone()]);
+
+        let frozen_notes = FrozenNotes::new()
+            .freeze(utxo.note, &note_id)
+            .unwrap();
+
+        let inputs = Inputs::new([note_id]);
+        let result = inputs.validate(&LockedNotes::new(), &frozen_notes, &utxos);
+
+        assert_eq!(result, Err(InputsError::FrozenNote(note_id)));
+    }
 
     #[test]
     fn test_utxo_by_index() {

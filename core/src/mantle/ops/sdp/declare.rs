@@ -208,3 +208,57 @@ impl Operation<SDPDeclareGenesisValidationContext<'_>> for SDPDeclareOp {
         SDPDeclareValidationExt::execute(self, ctx)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use lb_groth16::Fr;
+    use lb_key_management_system_keys::keys::{Ed25519Key, UnsecuredZkKey};
+
+    use super::*;
+    use crate::{
+        mantle::{Note, NoteId, Utxo, ledger::Utxos},
+        sdp::{Locator, MinStake, ProviderId, ServiceType},
+    };
+
+    fn make_frozen_note_in_utxo_tree() -> (Utxos, FrozenNotes, NoteId) {
+        let pk = UnsecuredZkKey::new(Fr::from(0u64)).to_public_key();
+        let note = Note::new(100, pk);
+        let utxo = Utxo::new([0u8; 32], 0, note);
+        let note_id = utxo.id();
+
+        let mut utxos = Utxos::new();
+        (utxos, _) = utxos.insert(note_id, utxo);
+        let frozen_notes = FrozenNotes::new().freeze(note, &note_id).unwrap();
+
+        (utxos, frozen_notes, note_id)
+    }
+
+    #[test]
+    fn sdp_declare_rejects_frozen_note_as_collateral() {
+        let (utxos, frozen_notes, note_id) = make_frozen_note_in_utxo_tree();
+
+        let op = SDPDeclareOp {
+            service_type: ServiceType::BlendNetwork,
+            locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
+            provider_id: ProviderId(Ed25519Key::from_bytes(&[0u8; 32]).public_key()),
+            zk_id: UnsecuredZkKey::new(Fr::from(0u64)).to_public_key(),
+            locked_note_id: note_id,
+        };
+
+        let ctx = SDPDeclareGenesisValidationContext {
+            utxo_tree: &utxos,
+            locked_notes: &LockedNotes::new(),
+            frozen_notes: &frozen_notes,
+            declarations: &Declarations::new_sync(),
+            min_stake: &MinStake {
+                threshold: 1,
+                timestamp: 0,
+            },
+        };
+
+        assert_eq!(
+            Operation::<SDPDeclareGenesisValidationContext>::validate(&op, &ctx),
+            Err(SdpError::NoteFrozen { note_id }),
+        );
+    }
+}

@@ -246,19 +246,7 @@ impl LedgerState {
         let old_epoch = config.epoch(self.cryptarchia_ledger.slot);
         let new_epoch = config.epoch(slot);
         if new_epoch > old_epoch {
-            // Update channels to mint UTXO
-            let (new_channels, minted_utxos) = self
-                .mantle_ledger
-                .channels()
-                .mint_frozen_notes(old_epoch)
-                .map_err(|e| LedgerError::Mantle(e.into()))?;
-            self.mantle_ledger = self.mantle_ledger.update_channels(new_channels);
-
-            // Insert UTXO in the Ledger BEFORE the cryptarchia snapshot
-            for utxo in minted_utxos {
-                self.cryptarchia_ledger.utxos =
-                    self.cryptarchia_ledger.utxos.insert(utxo.id(), utxo).0;
-            }
+            self.mint_channel_frozen_notes(new_epoch)?;
         }
 
         let mut cryptarchia_ledger = self
@@ -432,6 +420,22 @@ impl LedgerState {
         // Update Execution market state
         self = self.update_execution_market(total_block_execution_gas);
         Ok((self, block_events))
+    }
+
+    pub fn mint_channel_frozen_notes<Id>(
+        &mut self,
+        epoch: lb_cryptarchia_engine::Epoch,
+    ) -> Result<(), LedgerError<Id>> {
+        let (new_channels, minted_utxos) = self
+            .mantle_ledger
+            .channels()
+            .mint_frozen_notes(epoch)
+            .map_err(|e| LedgerError::Mantle(e.into()))?;
+        self.mantle_ledger = self.mantle_ledger.clone().update_channels(new_channels);
+        for utxo in minted_utxos {
+            self.cryptarchia_ledger.utxos = self.cryptarchia_ledger.utxos.insert(utxo.id(), utxo).0;
+        }
+        Ok(())
     }
 
     pub fn from_utxos(utxos: impl IntoIterator<Item = Utxo>, config: &Config) -> Self {
@@ -776,8 +780,13 @@ mod tests {
         },
         proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
     };
+    use lb_core::mantle::{
+        channel::{ChannelState, Channels, SlotTimeframe, SlotTimeout},
+        ops::channel::config::{Keys, ZkKeys},
+    };
     use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey, ZkKey, ZkPublicKey};
     use num_bigint::BigUint;
+    use rpds::HashTrieMapSync;
 
     use super::*;
     use crate::cryptarchia::tests::utxo_with_sk;
@@ -1616,5 +1625,141 @@ mod tests {
                 .get_pending_rewards()
         );
         assert!(events.is_empty());
+    }
+
+    #[test]
+    fn minted_frozen_utxos_appear_in_utxo_tree_before_epoch_snapshot() {
+        let test_config = config();
+        let stake_utxo = utxo();
+        let epoch_length = test_config.epoch_length();
+
+        let mut state = LedgerState::from_utxos([stake_utxo], &test_config);
+
+        let channel_id = ChannelId::from([0u8; 32]);
+        let zk_pk = ZkPublicKey::zero();
+
+        // Build a channel with 1 sequencer and floating balance 10
+        let mut channels = Channels::new();
+        channels.channels = channels.channels.insert(
+            channel_id,
+            ChannelState {
+                accredited_keys: Keys::from(Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap())
+                    .into(),
+                configuration_threshold: 1,
+                tip_message: MsgId::root(),
+                tip_slot: Slot::default(),
+                tip_sequencer: 0,
+                tip_sequencer_starting_slot: Slot::default(),
+                posting_timeframe: SlotTimeframe::from(0u32),
+                posting_timeout: SlotTimeout::from(0u32),
+                withdraw_threshold: 1,
+                withdrawal_nonce: 0,
+                floating_balance: 10,
+                solvency: 10,
+                frozen_note_map: HashTrieMapSync::new_sync(),
+                sequencers_zk_pks: ZkKeys::from(zk_pk).into(),
+            },
+        );
+        channels.mint_eligible_channels.push(channel_id);
+        state.mantle_ledger = state.mantle_ledger.update_channels(channels.clone());
+
+        // Call mint_channel_frozen_notes for the new epoch
+        let epoch_boundary_slot = Slot::from(epoch_length);
+        let new_epoch = test_config.epoch(epoch_boundary_slot);
+
+        state
+            .mint_channel_frozen_notes::<HeaderId>(new_epoch)
+            .unwrap();
+
+        let minted_note_ids: Vec<_> = state
+            .mantle_ledger
+            .channels()
+            .channel_state(&channel_id)
+            .unwrap()
+            .frozen_note_map
+            .iter()
+            .map(|(_, note_id)| *note_id)
+            .collect();
+
+        assert!(!minted_note_ids.is_empty());
+        for note_id in &minted_note_ids {
+            assert!(state.cryptarchia_ledger.utxos.contains(note_id));
+        }
+    }
+
+    #[test]
+    fn no_frozen_note_minting_occurs_in_same_epoch_block() {
+        let test_config = config();
+        let stake_utxo = utxo();
+
+        let mut state = LedgerState::from_utxos([stake_utxo], &test_config);
+
+        let channel_id = ChannelId::from([0u8; 32]);
+        let zk_pk = ZkPublicKey::zero();
+
+        let mut channels = Channels::new();
+        channels.channels = channels.channels.insert(
+            channel_id,
+            ChannelState {
+                accredited_keys: Keys::from(Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap())
+                    .into(),
+                configuration_threshold: 1,
+                tip_message: MsgId::root(),
+                tip_slot: Slot::default(),
+                tip_sequencer: 0,
+                tip_sequencer_starting_slot: Slot::default(),
+                posting_timeframe: SlotTimeframe::from(0u32),
+                posting_timeout: SlotTimeout::from(0u32),
+                withdraw_threshold: 1,
+                withdrawal_nonce: 0,
+                floating_balance: 10,
+                solvency: 10,
+                frozen_note_map: HashTrieMapSync::new_sync(),
+                sequencers_zk_pks: ZkKeys::from(zk_pk).into(),
+            },
+        );
+        channels.mint_eligible_channels.push(channel_id);
+        state.mantle_ledger = state.mantle_ledger.update_channels(channels);
+
+        // Slot 1 is in the same epoch as slot 0 — no epoch transition, no minting
+        let same_epoch_slot = Slot::from(1);
+        let proof = generate_proof(&state.cryptarchia_ledger, &stake_utxo, same_epoch_slot);
+        let new_state = state
+            .try_apply_header::<_, HeaderId>(same_epoch_slot, &proof, &test_config)
+            .unwrap();
+
+        let channel_state = new_state
+            .mantle_ledger
+            .channels()
+            .channel_state(&channel_id)
+            .unwrap();
+
+        // No notes minted: frozen_note_map empty, mint_eligible_channels still
+        // populated
+        assert!(channel_state.frozen_note_map.is_empty());
+        assert!(
+            new_state
+                .mantle_ledger
+                .channels()
+                .mint_eligible_channels
+                .contains(&channel_id)
+        );
+    }
+
+    #[test]
+    fn mint_channel_frozen_notes_does_nothing_when_no_eligible_channels() {
+        let test_config = config();
+        let stake_utxo = utxo();
+
+        let mut state = LedgerState::from_utxos([stake_utxo], &test_config);
+
+        // No channels registered, mint_eligible_channels is empty
+        let channels_before = state.mantle_ledger.channels().clone();
+
+        let epoch = test_config.epoch(Slot::from(test_config.epoch_length()));
+        state.mint_channel_frozen_notes::<HeaderId>(epoch).unwrap();
+
+        // State is completely unchanged
+        assert_eq!(state.mantle_ledger.channels(), &channels_before);
     }
 }

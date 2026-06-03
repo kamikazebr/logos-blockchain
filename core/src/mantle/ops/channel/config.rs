@@ -208,6 +208,14 @@ impl Operation<ChannelConfigValidationContext<'_>> for ChannelConfigOp {
             channel.tip_slot = ctx.block_slot;
             channel.tip_message = self.id();
             channel.sequencers_zk_pks = self.sequencer_zk_pks.clone().into();
+
+            // Mark as mint-eligible if the new sequencer set can now consume the
+            // floating balance.
+            if channel.sequencers_zk_pks.len() <= channel.floating_balance as usize
+                && !ctx.channels.mint_eligible_channels.contains(&self.channel)
+            {
+                ctx.channels.mint_eligible_channels.push(self.channel);
+            }
         } else {
             ctx.channels.channels = ctx.channels.channels.insert(
                 self.channel,
@@ -230,5 +238,247 @@ impl Operation<ChannelConfigValidationContext<'_>> for ChannelConfigOp {
             );
         }
         Ok((ctx, Events::new()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use lb_groth16::Fr;
+    use lb_key_management_system_keys::keys::UnsecuredZkKey;
+    use rpds::HashTrieMapSync;
+
+    use super::*;
+    use crate::{
+        mantle::{Note, TxHash, Utxo, channel::Channels},
+        proofs::channel_multi_sig_proof::ChannelMultiSigProof,
+    };
+
+    fn dummy_tx_hash() -> TxHash {
+        [0u8; 32].into()
+    }
+
+    fn empty_proof() -> ChannelMultiSigProof {
+        ChannelMultiSigProof::new(vec![]).unwrap()
+    }
+
+    fn zk_pk(seed: u8) -> ZkPublicKey {
+        UnsecuredZkKey::new(Fr::from(seed)).to_public_key()
+    }
+
+    fn ed_pk(seed: u8) -> Ed25519PublicKey {
+        use lb_key_management_system_keys::keys::Ed25519Key;
+        Ed25519Key::from_bytes(&[seed; 32]).public_key()
+    }
+
+    #[test]
+    fn config_rejected_when_key_count_differs_from_zk_pk_count() {
+        let channel_id = ChannelId::from([0u8; 32]);
+        let channels = Channels::new();
+        let tx_hash = dummy_tx_hash();
+        let proof = empty_proof();
+
+        // 2 ed keys but only 1 zk key → mismatch
+        let op = ChannelConfigOp {
+            channel: channel_id,
+            keys: Keys::try_from(vec![ed_pk(0), ed_pk(1)]).unwrap(),
+            posting_timeframe: 0.into(),
+            posting_timeout: 0.into(),
+            configuration_threshold: 1,
+            withdraw_threshold: 1,
+            sequencer_zk_pks: ZkKeys::from(zk_pk(0)).into(),
+        };
+
+        let ctx = ChannelConfigValidationContext {
+            channels: &channels,
+            tx_hash: &tx_hash,
+            config_sigs: &proof,
+        };
+
+        assert_eq!(op.validate(&ctx), Err(Error::InvalidChannelConfig));
+    }
+
+    #[test]
+    fn config_unfreezes_removed_sequencer_frozen_notes() {
+        let channel_id = ChannelId::from([0u8; 32]);
+        let pk_keep = zk_pk(0);
+        let pk_remove = zk_pk(1);
+        let epoch: Epoch = 1.into();
+        let note_value: u64 = 10;
+
+        // Build the frozen note for the sequencer being removed
+        let note = Note::new(note_value, pk_remove);
+        let utxo = Utxo::new([1u8; 32], 0, note);
+        let note_id = utxo.id();
+
+        // Insert note into UTXO tree
+        let mut utxos = Utxos::new();
+        (utxos, _) = utxos.insert(note_id, utxo);
+
+        // Build channel state with both sequencers and the frozen note
+        let mut channels = Channels::new();
+        channels.frozen_notes = channels.frozen_notes.freeze(note, &note_id).unwrap();
+        channels.channels = channels.channels.insert(
+            channel_id,
+            ChannelState {
+                accredited_keys: Keys::try_from(vec![ed_pk(0), ed_pk(1)]).unwrap().into(),
+                configuration_threshold: 1,
+                tip_message: MsgId::root(),
+                tip_slot: Slot::default(),
+                tip_sequencer: 0,
+                tip_sequencer_starting_slot: Slot::default(),
+                posting_timeframe: 0.into(),
+                posting_timeout: 0.into(),
+                withdraw_threshold: 1,
+                withdrawal_nonce: 0,
+                floating_balance: 5,
+                solvency: 15,
+                frozen_note_map: HashTrieMapSync::new_sync().insert((epoch, pk_remove), note_id),
+                sequencers_zk_pks: ZkKeys::try_from(vec![pk_keep, pk_remove]).unwrap().into(),
+            },
+        );
+
+        // Config op that drops pk_remove and keeps only pk_keep
+        let op = ChannelConfigOp {
+            channel: channel_id,
+            keys: Keys::from(ed_pk(0)).into(),
+            posting_timeframe: 0.into(),
+            posting_timeout: 0.into(),
+            configuration_threshold: 1,
+            withdraw_threshold: 1,
+            sequencer_zk_pks: ZkKeys::from(pk_keep).into(),
+        };
+
+        let (result, _) = op
+            .execute(ChannelConfigExecutionContext {
+                channels,
+                block_slot: Slot::default(),
+                utxos,
+            })
+            .unwrap();
+
+        let state = result.channels.channel_state(&channel_id).unwrap();
+
+        // Frozen note value returned to floating balance
+        assert_eq!(state.floating_balance, 5 + note_value);
+        // Removed sequencer's entry cleared from the map
+        assert!(state.frozen_note_map.get(&(epoch, pk_remove)).is_none());
+        // Note removed from global frozen set
+        assert!(!result.channels.frozen_notes.contains(&note_id));
+    }
+
+    #[test]
+    fn config_keeps_frozen_notes_when_sequencer_set_unchanged() {
+        let channel_id = ChannelId::from([0u8; 32]);
+        let pk = zk_pk(0);
+        let epoch: Epoch = 1.into();
+        let note_value: u64 = 10;
+
+        let note = Note::new(note_value, pk);
+        let utxo = Utxo::new([1u8; 32], 0, note);
+        let note_id = utxo.id();
+
+        let mut utxos = Utxos::new();
+        (utxos, _) = utxos.insert(note_id, utxo);
+
+        let mut channels = Channels::new();
+        channels.frozen_notes = channels.frozen_notes.freeze(note, &note_id).unwrap();
+        channels.channels = channels.channels.insert(
+            channel_id,
+            ChannelState {
+                accredited_keys: Keys::from(ed_pk(0)).into(),
+                configuration_threshold: 1,
+                tip_message: MsgId::root(),
+                tip_slot: Slot::default(),
+                tip_sequencer: 0,
+                tip_sequencer_starting_slot: Slot::default(),
+                posting_timeframe: 0.into(),
+                posting_timeout: 0.into(),
+                withdraw_threshold: 1,
+                withdrawal_nonce: 0,
+                floating_balance: 5,
+                solvency: 15,
+                frozen_note_map: HashTrieMapSync::new_sync().insert((epoch, pk), note_id),
+                sequencers_zk_pks: ZkKeys::from(pk).into(),
+            },
+        );
+
+        // Config op keeps the same sequencer pk
+        let op = ChannelConfigOp {
+            channel: channel_id,
+            keys: Keys::from(ed_pk(0)).into(),
+            posting_timeframe: 0.into(),
+            posting_timeout: 0.into(),
+            configuration_threshold: 1,
+            withdraw_threshold: 1,
+            sequencer_zk_pks: ZkKeys::from(pk).into(),
+        };
+
+        let (result, _) = op
+            .execute(ChannelConfigExecutionContext {
+                channels,
+                block_slot: Slot::default(),
+                utxos,
+            })
+            .unwrap();
+
+        let state = result.channels.channel_state(&channel_id).unwrap();
+
+        // Floating balance unchanged
+        assert_eq!(state.floating_balance, 5);
+        // Frozen note map entry preserved
+        assert_eq!(
+            state.frozen_note_map.get(&(epoch, pk)).copied(),
+            Some(note_id)
+        );
+        // Frozen note still tracked
+        assert!(result.channels.frozen_notes.contains(&note_id));
+    }
+
+    #[test]
+    fn config_marks_channel_mint_eligible_when_sequencers_added_with_sufficient_balance() {
+        let channel_id = ChannelId::from([0u8; 32]);
+
+        // Channel exists with floating balance but no sequencers yet
+        let mut channels = Channels::new();
+        channels.channels = channels.channels.insert(
+            channel_id,
+            ChannelState {
+                accredited_keys: Keys::from(ed_pk(0)).into(),
+                configuration_threshold: 1,
+                tip_message: MsgId::root(),
+                tip_slot: Slot::default(),
+                tip_sequencer: 0,
+                tip_sequencer_starting_slot: Slot::default(),
+                posting_timeframe: 0.into(),
+                posting_timeout: 0.into(),
+                withdraw_threshold: 1,
+                withdrawal_nonce: 0,
+                floating_balance: 10,
+                solvency: 10,
+                frozen_note_map: HashTrieMapSync::new_sync(),
+                sequencers_zk_pks: ZkKeys::try_from(vec![]).unwrap().into(),
+            },
+        );
+
+        // Config op introduces 2 sequencers — balance 10 > 2
+        let op = ChannelConfigOp {
+            channel: channel_id,
+            keys: Keys::try_from(vec![ed_pk(0), ed_pk(1)]).unwrap(),
+            posting_timeframe: 0.into(),
+            posting_timeout: 0.into(),
+            configuration_threshold: 1,
+            withdraw_threshold: 1,
+            sequencer_zk_pks: ZkKeys::try_from(vec![zk_pk(0), zk_pk(1)]).unwrap().into(),
+        };
+
+        let (result, _) = op
+            .execute(ChannelConfigExecutionContext {
+                channels,
+                block_slot: Slot::default(),
+                utxos: Utxos::new(),
+            })
+            .unwrap();
+
+        assert!(result.channels.mint_eligible_channels.contains(&channel_id));
     }
 }

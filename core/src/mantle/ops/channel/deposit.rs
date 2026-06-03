@@ -129,7 +129,7 @@ impl Operation<DepositValidationContext<'_>> for DepositOp {
             // mark the channel if it is eligible to mint frozen notes and not already
             // marked
             if !channel.sequencers_zk_pks.is_empty()
-                && channel.sequencers_zk_pks.len() < channel.floating_balance as usize
+                && channel.sequencers_zk_pks.len() <= channel.floating_balance as usize
                 && !ctx
                     .channels
                     .mint_eligible_channels
@@ -157,5 +157,149 @@ impl Operation<DepositValidationContext<'_>> for DepositOp {
         .collect();
 
         Ok((ctx, events))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use lb_groth16::{Field as _, Fr};
+    use lb_key_management_system_keys::keys::{Ed25519Key, UnsecuredZkKey, ZkKey};
+    use rand::thread_rng;
+    use rpds::HashTrieMapSync;
+
+    use super::*;
+    use crate::{
+        mantle::{
+            Note, Utxo,
+            channel::{ChannelState, Channels},
+            ops::channel::{
+                Ed25519PublicKey, MsgId,
+                config::{Keys, ZkKeys},
+            },
+        },
+        sdp::locked_notes::LockedNotes,
+    };
+
+    fn ed_pk(seed: u8) -> Ed25519PublicKey {
+        Ed25519Key::from_bytes(&[seed; 32]).public_key()
+    }
+
+    fn zk_pk(seed: u8) -> ZkPublicKey {
+        UnsecuredZkKey::new(Fr::from(seed)).to_public_key()
+    }
+
+    fn make_utxo(value: u64) -> (ZkKey, Utxo) {
+        use lb_utils::blake_rng::RngCore as _;
+        let mut op_id = [0u8; 32];
+        thread_rng().fill_bytes(&mut op_id);
+        let zk_sk = ZkKey::from(Fr::ZERO);
+        let utxo = Utxo {
+            op_id,
+            output_index: 0,
+            note: Note::new(value, zk_sk.to_public_key()),
+        };
+        (zk_sk, utxo)
+    }
+
+    fn utxo_tree(utxos: Vec<Utxo>) -> Utxos {
+        let mut tree = Utxos::new();
+        for u in utxos {
+            (tree, _) = tree.insert(u.id(), u);
+        }
+        tree
+    }
+
+    fn channel_with_sequencers(channel_id: ChannelId, balance: u64, n: u8) -> Channels {
+        let mut channels = Channels::new();
+        channels.channels = channels.channels.insert(
+            channel_id,
+            ChannelState {
+                accredited_keys: Keys::try_from(
+                    std::iter::once(ed_pk(0))
+                        .chain((1..n).map(ed_pk))
+                        .collect::<Vec<_>>(),
+                )
+                .unwrap()
+                .into(),
+                configuration_threshold: 1,
+                tip_message: MsgId::root(),
+                tip_slot: Default::default(),
+                tip_sequencer: 0,
+                tip_sequencer_starting_slot: Default::default(),
+                posting_timeframe: 0.into(),
+                posting_timeout: 0.into(),
+                withdraw_threshold: 1,
+                withdrawal_nonce: 0,
+                floating_balance: balance,
+                solvency: balance,
+                frozen_note_map: HashTrieMapSync::new_sync(),
+                sequencers_zk_pks: ZkKeys::try_from((0..n).map(zk_pk).collect::<Vec<_>>())
+                    .unwrap()
+                    .into(),
+            },
+        );
+        channels
+    }
+
+    fn execute_deposit(channels: Channels, value: u64) -> Channels {
+        let channel_id = *channels.channels.keys().next().unwrap();
+        let (_, utxo) = make_utxo(value);
+        let op = DepositOp {
+            channel_id,
+            inputs: [utxo.id()].into(),
+            metadata: Metadata::empty(),
+        };
+        op.execute(DepositExecutionContext {
+            channels,
+            locked_notes: LockedNotes::new(),
+            utxos: utxo_tree(vec![utxo]),
+            tx_hash: [0u8; 32].into(),
+        })
+        .unwrap()
+        .0
+        .channels
+    }
+
+    #[test]
+    fn deposit_marks_mint_eligible_when_balance_meets_or_exceeds_sequencer_count() {
+        let channel_id = ChannelId::from([0u8; 32]);
+
+        // balance == n_sequencers (boundary: exactly eligible)
+        let channels = channel_with_sequencers(channel_id, 0, 2);
+        let updated = execute_deposit(channels, 2);
+        assert!(updated.mint_eligible_channels.contains(&channel_id));
+
+        // balance > n_sequencers (clearly eligible)
+        let channels = channel_with_sequencers(channel_id, 0, 2);
+        let updated = execute_deposit(channels, 5);
+        assert!(updated.mint_eligible_channels.contains(&channel_id));
+    }
+
+    #[test]
+    fn deposit_does_not_mark_mint_eligible_when_no_sequencers() {
+        let channel_id = ChannelId::from([0u8; 32]);
+        // 0 sequencers → never eligible regardless of balance
+        let channels = channel_with_sequencers(channel_id, 0, 0);
+        let updated = execute_deposit(channels, 10);
+        assert!(!updated.mint_eligible_channels.contains(&channel_id));
+    }
+
+    #[test]
+    fn deposit_does_not_duplicate_mint_eligible_channels() {
+        let channel_id = ChannelId::from([0u8; 32]);
+        // First deposit makes the channel eligible
+        let channels = channel_with_sequencers(channel_id, 0, 1);
+        let updated = execute_deposit(channels, 5);
+        assert_eq!(
+            updated.mint_eligible_channels.iter().filter(|&&id| id == channel_id).count(),
+            1
+        );
+
+        // Second deposit must not add it again
+        let updated2 = execute_deposit(updated, 5);
+        assert_eq!(
+            updated2.mint_eligible_channels.iter().filter(|&&id| id == channel_id).count(),
+            1
+        );
     }
 }

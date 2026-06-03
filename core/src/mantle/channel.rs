@@ -200,7 +200,10 @@ impl Channels {
         for channel_id in &self.mint_eligible_channels {
             if let Some(channel) = channels.channels.get_mut(channel_id) {
                 let num_sequencers = channel.sequencers_zk_pks.len();
-                let note_value = channel.floating_balance / num_sequencers as Value;
+                let note_value = channel
+                    .floating_balance
+                    .checked_div(num_sequencers as Value)
+                    .unwrap_or(0);
 
                 if num_sequencers > 0 && note_value > 0 {
                     channel.floating_balance -= note_value * num_sequencers as Value;
@@ -780,5 +783,300 @@ mod tests {
     fn zero_elapsed_no_change() {
         let channel = make_channel(100, 3, 95, 10, 20, 5);
         assert_eq!(channel.round_robin(100.into()), (3, 95.into()));
+    }
+
+    // --- mint_frozen_notes ---
+
+    fn channels_with_mint_candidates(
+        channel_id: ChannelId,
+        floating_balance: Value,
+        zk_pks: Vec<ZkPublicKey>,
+    ) -> Channels {
+        let mut channels = Channels::new();
+        let n = zk_pks.len() as u8;
+        channels.channels = channels.channels.insert(
+            channel_id,
+            ChannelState {
+                accredited_keys: Keys::try_from((0..n).map(test_public_key).collect::<Vec<_>>())
+                    .unwrap()
+                    .into(),
+                configuration_threshold: 1,
+                tip_message: MsgId::root(),
+                tip_slot: Slot::default(),
+                tip_sequencer: 0,
+                tip_sequencer_starting_slot: Slot::default(),
+                posting_timeframe: 0.into(),
+                posting_timeout: 0.into(),
+                withdraw_threshold: 1,
+                withdrawal_nonce: 0,
+                floating_balance,
+                solvency: floating_balance,
+                frozen_note_map: HashTrieMapSync::new_sync(),
+                sequencers_zk_pks: ZkKeys::try_from(zk_pks).unwrap().into(),
+            },
+        );
+        channels.mint_eligible_channels.push(channel_id);
+        channels
+    }
+
+    #[test]
+    fn mints_one_note_per_sequencer() {
+        let channel_id = ChannelId::from([0u8; 32]);
+        let pk0 = test_public_zk_key(0);
+        let pk1 = test_public_zk_key(1);
+        let epoch: Epoch = 3.into();
+
+        let channels = channels_with_mint_candidates(channel_id, 13, vec![pk0, pk1]);
+
+        let (updated, utxos) = channels.mint_frozen_notes(epoch).unwrap();
+
+        assert_eq!(utxos.len(), 2);
+        // floor(13 / 2) = 6
+        assert!(utxos.iter().all(|u| u.note.value == 6));
+
+        // Floating balance reduced by note_value * n_sequencers = 12
+        assert_eq!(
+            updated.channel_state(&channel_id).unwrap().floating_balance,
+            1
+        );
+
+        // frozen_note_map has one entry per sequencer for this epoch
+        let state = updated.channel_state(&channel_id).unwrap();
+        assert!(state.frozen_note_map.contains_key(&(epoch, pk0)));
+        assert!(state.frozen_note_map.contains_key(&(epoch, pk1)));
+
+        for utxo in &utxos {
+            assert!(updated.frozen_notes.contains(&utxo.id()));
+        }
+
+        // mint_eligible_channels cleared
+        assert!(updated.mint_eligible_channels.is_empty());
+    }
+
+    #[test]
+    fn skips_channel_with_no_sequencers() {
+        let channel_id = ChannelId::from([0u8; 32]);
+        let mut channels = Channels::new();
+        channels.channels = channels.channels.insert(
+            channel_id,
+            ChannelState {
+                accredited_keys: Keys::from(test_public_key(0)).into(),
+                configuration_threshold: 1,
+                tip_message: MsgId::root(),
+                tip_slot: Slot::default(),
+                tip_sequencer: 0,
+                tip_sequencer_starting_slot: Slot::default(),
+                posting_timeframe: 0.into(),
+                posting_timeout: 0.into(),
+                withdraw_threshold: 1,
+                withdrawal_nonce: 0,
+                floating_balance: 100,
+                solvency: 100,
+                frozen_note_map: HashTrieMapSync::new_sync(),
+                sequencers_zk_pks: ZkKeys::try_from(vec![]).unwrap().into(),
+            },
+        );
+        channels.mint_eligible_channels.push(channel_id);
+
+        let (updated, utxos) = channels.mint_frozen_notes(1.into()).unwrap();
+
+        assert!(utxos.is_empty());
+        assert_eq!(
+            updated.channel_state(&channel_id).unwrap().floating_balance,
+            100
+        );
+        assert!(updated.mint_eligible_channels.is_empty());
+    }
+
+    #[test]
+    fn skips_when_balance_smaller_than_sequencer_count() {
+        let channel_id = ChannelId::from([0u8; 32]);
+        let channels = channels_with_mint_candidates(
+            channel_id,
+            1,
+            vec![test_public_zk_key(0), test_public_zk_key(1)],
+        );
+
+        let (updated, utxos) = channels.mint_frozen_notes(1.into()).unwrap();
+
+        assert!(utxos.is_empty());
+        assert_eq!(
+            updated.channel_state(&channel_id).unwrap().floating_balance,
+            1
+        );
+        assert!(
+            updated
+                .channel_state(&channel_id)
+                .unwrap()
+                .frozen_note_map
+                .is_empty()
+        );
+        assert!(updated.mint_eligible_channels.is_empty());
+    }
+
+    #[test]
+    fn map_entries_match_returned_utxo_ids() {
+        let channel_id = ChannelId::from([0u8; 32]);
+        let pk0 = test_public_zk_key(0);
+        let pk1 = test_public_zk_key(1);
+        let epoch: Epoch = 5.into();
+
+        let channels = channels_with_mint_candidates(channel_id, 10, vec![pk0, pk1]);
+        let (updated, utxos) = channels.mint_frozen_notes(epoch).unwrap();
+
+        let state = updated.channel_state(&channel_id).unwrap();
+
+        // The note_id stored in frozen_note_map for each (epoch, pk) must exactly
+        // match the id of the corresponding returned utxo.
+        for utxo in &utxos {
+            let pk = utxo.note.pk;
+            let stored_note_id = state
+                .frozen_note_map
+                .get(&(epoch, pk))
+                .copied()
+                .expect("entry must be present for every sequencer pk");
+            assert_eq!(stored_note_id, utxo.id());
+        }
+    }
+
+    #[test]
+    fn all_minted_notes_are_in_frozen_set() {
+        let channel_id = ChannelId::from([0u8; 32]);
+        let pks = vec![
+            test_public_zk_key(0),
+            test_public_zk_key(1),
+            test_public_zk_key(2),
+        ];
+        let channels = channels_with_mint_candidates(channel_id, 9, pks);
+        let (updated, utxos) = channels.mint_frozen_notes(2.into()).unwrap();
+
+        assert_eq!(utxos.len(), 3);
+        for utxo in &utxos {
+            assert!(updated.frozen_notes.contains(&utxo.id()));
+        }
+    }
+
+    #[test]
+    fn mint_eligible_channels_cleared_even_when_nothing_minted() {
+        let channel_id = ChannelId::from([0u8; 32]);
+        let channels = channels_with_mint_candidates(channel_id, 0, vec![test_public_zk_key(0)]);
+
+        assert_eq!(channels.mint_eligible_channels.len(), 1);
+
+        let (updated, utxos) = channels.mint_frozen_notes(1.into()).unwrap();
+
+        assert!(utxos.is_empty());
+        assert!(updated.mint_eligible_channels.is_empty());
+    }
+
+    #[test]
+    fn silently_skips_missing_channel() {
+        let present_id = ChannelId::from([0u8; 32]);
+        let ghost_id = ChannelId::from([1u8; 32]);
+
+        let mut channels =
+            channels_with_mint_candidates(present_id, 10, vec![test_public_zk_key(0)]);
+        // ghost_id is in mint_eligible_channels but has no entry in channels map
+        channels.mint_eligible_channels.push(ghost_id);
+
+        let (updated, utxos) = channels.mint_frozen_notes(1.into()).unwrap();
+
+        // Only the present channel minted one note
+        assert_eq!(utxos.len(), 1);
+        assert!(updated.channel_state(&present_id).is_some());
+        // ghost channel was skipped without error
+        assert!(updated.channel_state(&ghost_id).is_none());
+        assert!(updated.mint_eligible_channels.is_empty());
+    }
+
+    #[test]
+    fn processes_all_eligible_channels() {
+        let id_a = ChannelId::from([0u8; 32]);
+        let id_b = ChannelId::from([1u8; 32]);
+        let epoch: Epoch = 1.into();
+
+        let mut channels = channels_with_mint_candidates(
+            id_a,
+            6,
+            vec![test_public_zk_key(0), test_public_zk_key(1)],
+        );
+
+        channels.channels = channels.channels.insert(
+            id_b,
+            ChannelState {
+                accredited_keys: Keys::from(test_public_key(2)).into(),
+                configuration_threshold: 1,
+                tip_message: MsgId::root(),
+                tip_slot: Slot::default(),
+                tip_sequencer: 0,
+                tip_sequencer_starting_slot: Slot::default(),
+                posting_timeframe: 0.into(),
+                posting_timeout: 0.into(),
+                withdraw_threshold: 1,
+                withdrawal_nonce: 0,
+                floating_balance: 9,
+                solvency: 9,
+                frozen_note_map: HashTrieMapSync::new_sync(),
+                sequencers_zk_pks: ZkKeys::from(test_public_zk_key(2)).into(),
+            },
+        );
+        channels.mint_eligible_channels.push(id_b);
+
+        let (updated, utxos) = channels.mint_frozen_notes(epoch).unwrap();
+
+        // Channel A: 2 sequencers, balance 6 → 2 notes of value 3
+        let state_a = updated.channel_state(&id_a).unwrap();
+        assert_eq!(state_a.floating_balance, 0);
+        assert_eq!(state_a.frozen_note_map.size(), 2);
+
+        // Channel B: 1 sequencer, balance 9 → 1 note of value 9
+        let state_b = updated.channel_state(&id_b).unwrap();
+        assert_eq!(state_b.floating_balance, 0);
+        assert_eq!(state_b.frozen_note_map.size(), 1);
+
+        assert_eq!(utxos.len(), 3);
+        assert!(updated.mint_eligible_channels.is_empty());
+    }
+
+    #[test]
+    fn note_ids_are_deterministic() {
+        let channel_id = ChannelId::from([0u8; 32]);
+        let epoch: Epoch = 1.into();
+        let channels = channels_with_mint_candidates(
+            channel_id,
+            10,
+            vec![test_public_zk_key(0), test_public_zk_key(1)],
+        );
+
+        let (_, utxos_first) = channels.mint_frozen_notes(epoch).unwrap();
+        let (_, utxos_second) = channels.mint_frozen_notes(epoch).unwrap();
+
+        assert_eq!(utxos_first.len(), utxos_second.len());
+        for (a, b) in utxos_first.iter().zip(utxos_second.iter()) {
+            assert_eq!(a.id(), b.id());
+        }
+    }
+
+    #[test]
+    fn frozen_notes_are_present_in_utxo_tree_after_insertion() {
+        let channel_id = ChannelId::from([0u8; 32]);
+        let pks = vec![test_public_zk_key(0), test_public_zk_key(1)];
+        let channels = channels_with_mint_candidates(channel_id, 10, pks);
+
+        let (_, minted_utxos) = channels.mint_frozen_notes(1.into()).unwrap();
+
+        // Insert minted UTXOs into a UTXO tree
+        let mut tree = Utxos::new();
+        for utxo in &minted_utxos {
+            (tree, _) = tree.insert(utxo.id(), *utxo);
+        }
+
+        for utxo in &minted_utxos {
+            let note_id = utxo.id();
+            assert!(
+                tree.utxos().contains_key(&note_id),
+                "note {note_id:?} must be in the UTxO tree"
+            );
+        }
     }
 }
