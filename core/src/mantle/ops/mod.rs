@@ -246,3 +246,194 @@ pub enum OpProof {
     PoC(Groth16LeaderClaimProof),
     ChannelMultiSigProof(ChannelMultiSigProof),
 }
+
+/// Op ID test-vector generator.
+///
+/// This module does not assert library behaviour: it *emits* reference test
+/// vectors for the [`OpId`] computation of every mantle [`Op`] variant, so that
+/// alternative implementations (e.g. the nim implementation) can be checked for
+/// conformance against the canonical Rust encoding.
+///
+/// For each operation it prints, for a fixed deterministic instance:
+/// - `payload`: the canonical operation encoding without the leading opcode
+///   byte (i.e. exactly what `OpId::op_bytes` returns), and
+/// - the resulting `op_id = Blake2b-256(b"OPERATION_ID_V1" || payload)`.
+///
+/// For the variants that implement the [`OpId`] trait (`Transfer`,
+/// `ChannelDeposit`, `ChannelWithdraw`, `LeaderClaim`) the emitted `op_id` is
+/// asserted to equal `OpId::op_id`.
+///
+/// The test is `#[ignore]`d so it is skipped by `cargo test --all-features`.
+/// Run it on demand with:
+/// `cargo test -p logos-blockchain-core op_id_test_vectors -- --ignored
+/// --nocapture`
+#[cfg(test)]
+mod op_id_test_vectors {
+    use lb_blend_proofs::{
+        quota::{PROOF_OF_QUOTA_SIZE, VerifiedProofOfQuota},
+        selection::{PROOF_OF_SELECTION_SIZE, VerifiedProofOfSelection},
+    };
+    use lb_key_management_system_keys::keys::{Ed25519Key, ZkPublicKey};
+    use lb_poseidon2::Fr;
+
+    use super::*;
+    use crate::{
+        mantle::{
+            Note,
+            channel::{SlotTimeframe, SlotTimeout},
+            ledger::{Inputs, NoteId, Outputs},
+            ops::channel::{
+                ChannelId, MsgId,
+                config::{Keys, ZkKeys},
+                deposit::Metadata,
+            },
+        },
+        sdp::{
+            ActiveMessage, ActivityMetadata, DeclarationId, DeclarationMessage, Locator,
+            ProviderId, ServiceType, WithdrawMessage, blend::ActivityProof,
+        },
+    };
+
+    fn ed25519_pk(seed: u8) -> channel::Ed25519PublicKey {
+        Ed25519Key::from_bytes(&[seed; 32]).public_key()
+    }
+
+    fn zk_pk(seed: u64) -> ZkPublicKey {
+        ZkPublicKey::from(Fr::from(seed))
+    }
+
+    /// `op_id = blake2b256("OPERATION_ID_V1" || op_payload_bytes)`
+    /// where `op_payload_bytes` is the canonical operation encoding without the
+    /// 1-byte opcode tag (i.e. exactly what `OpId::op_bytes` returns).
+    fn op_id_from_payload(payload: &[u8]) -> [u8; 32] {
+        let mut preimage = OPERATION_ID_V1.clone();
+        preimage.extend_from_slice(payload);
+        Hasher::digest(&preimage).into()
+    }
+
+    fn print_vector(op: &Op) {
+        let payload = &op.encode()[1..]; // == OpId::op_bytes()
+        let op_id = op_id_from_payload(payload);
+
+        println!("================================================================");
+        println!("operation : {}", op.as_str());
+        println!("payload   : {}", hex::encode(payload));
+        println!("op_id     : {}", hex::encode(op_id));
+    }
+
+    /// Generates (and prints) the Op ID test vectors for every mantle
+    /// operation. Ignored by default so it never runs under `cargo test
+    /// --all-features`; invoke explicitly with `--ignored --nocapture` to
+    /// regenerate the vectors.
+    #[test]
+    #[ignore = "generates OpId test vectors on demand; run with --ignored --nocapture"]
+    fn generate_op_id_test_vectors() {
+        println!();
+        println!("op_id = Blake2b-256( b\"OPERATION_ID_V1\" || payload )");
+        println!("payload = canonical operation encoding without the opcode byte");
+
+        // 1. Transfer (0x00)
+        let transfer = Op::Transfer(TransferOp::new(
+            Inputs::new([NoteId(Fr::from(1u64)), NoteId(Fr::from(2u64))]),
+            Outputs::new([Note::new(100, zk_pk(10)), Note::new(200, zk_pk(11))]),
+        ));
+        print_vector(&transfer);
+        if let Op::Transfer(op) = &transfer {
+            assert_eq!(op.op_id(), op_id_from_payload(&op.op_bytes()));
+        }
+
+        // 2. ChannelDeposit (0x12)
+        let deposit = Op::ChannelDeposit(DepositOp {
+            channel_id: ChannelId::from([1u8; 32]),
+            inputs: Inputs::new([NoteId(Fr::from(3u64))]),
+            metadata: Metadata::try_from(b"deposit-metadata".to_vec()).unwrap(),
+        });
+        print_vector(&deposit);
+        if let Op::ChannelDeposit(op) = &deposit {
+            assert_eq!(op.op_id(), op_id_from_payload(&op.op_bytes()));
+        }
+
+        // 3. ChannelWithdraw (0x13)
+        let withdraw = Op::ChannelWithdraw(ChannelWithdrawOp {
+            channel_id: ChannelId::from([2u8; 32]),
+            outputs: Outputs::new([Note::new(500, zk_pk(12))]),
+            withdraw_nonce: 7,
+        });
+        print_vector(&withdraw);
+        if let Op::ChannelWithdraw(op) = &withdraw {
+            assert_eq!(op.op_id(), op_id_from_payload(&op.op_bytes()));
+        }
+
+        // 4. LeaderClaim (0x30)
+        let leader_claim = Op::LeaderClaim(LeaderClaimOp {
+            rewards_root: Fr::from(42u64).into(),
+            voucher_nullifier: Fr::from(43u64).into(),
+            pk: zk_pk(44),
+        });
+        print_vector(&leader_claim);
+        if let Op::LeaderClaim(op) = &leader_claim {
+            assert_eq!(op.op_id(), op_id_from_payload(&op.op_bytes()));
+        }
+
+        // 5. ChannelConfig (0x10)
+        let config = Op::ChannelConfig(ChannelConfigOp {
+            channel: ChannelId::from([3u8; 32]),
+            keys: Keys::try_from(vec![ed25519_pk(1), ed25519_pk(2)]).unwrap(),
+            sequencer_zk_pks: ZkKeys::try_from(vec![zk_pk(50), zk_pk(51)]).unwrap(),
+            posting_timeframe: SlotTimeframe::from(10u32),
+            posting_timeout: SlotTimeout::from(20u32),
+            configuration_threshold: 2,
+            withdraw_threshold: 1,
+        });
+        print_vector(&config);
+
+        // 6. ChannelInscribe (0x11)
+        let inscribe = Op::ChannelInscribe(InscriptionOp {
+            channel_id: ChannelId::from([4u8; 32]),
+            inscription: b"hello logos".into(),
+            parent: MsgId::root(),
+            signer: ed25519_pk(5),
+        });
+        print_vector(&inscribe);
+
+        // 7. SDPDeclare (0x20)
+        let declaration = DeclarationMessage {
+            service_type: ServiceType::BlendNetwork,
+            locators: "/ip4/127.0.0.1/udp/3000/quic-v1"
+                .parse::<Locator>()
+                .unwrap()
+                .into(),
+            provider_id: ProviderId(ed25519_pk(7)),
+            zk_id: zk_pk(70),
+            locked_note_id: NoteId(Fr::from(71u64)),
+        };
+        print_vector(&Op::SDPDeclare(declaration));
+
+        // 8. SDPWithdraw (0x21)
+        let sdp_withdraw = Op::SDPWithdraw(WithdrawMessage {
+            declaration_id: DeclarationId([8u8; 32]),
+            locked_note_id: NoteId(Fr::from(80u64)),
+            nonce: 3,
+        });
+        print_vector(&sdp_withdraw);
+
+        // 9. SDPActive (0x22)
+        let activity = ActivityProof {
+            session: 10,
+            signing_key: ed25519_pk(1),
+            proof_of_quota: VerifiedProofOfQuota::from_bytes_unchecked([2u8; PROOF_OF_QUOTA_SIZE])
+                .into(),
+            proof_of_selection: VerifiedProofOfSelection::from_bytes_unchecked(
+                [3u8; PROOF_OF_SELECTION_SIZE],
+            )
+            .into(),
+        };
+        let sdp_active = Op::SDPActive(ActiveMessage {
+            declaration_id: DeclarationId([9u8; 32]),
+            nonce: 5,
+            metadata: ActivityMetadata::Blend(Box::new(activity)),
+        });
+        print_vector(&sdp_active);
+        println!("================================================================");
+    }
+}
