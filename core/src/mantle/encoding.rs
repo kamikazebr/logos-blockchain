@@ -1787,9 +1787,7 @@ mod tests {
                     0, 0, // withdraw_threshold
                     1, 0, // ZkKeys count = 1
                     0, 0, 0, 0, 0, 0, 0, 0, // ZkPublicKey::zero()
-                    0, 0, 0, 0, 0, 0, 0, 0,
-                    0, 0, 0, 0, 0, 0, 0, 0,
-                    0, 0, 0, 0, 0, 0, 0, 0,
+                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
                 ][..],
                 code: ErrorKind::LengthValue,
             }),

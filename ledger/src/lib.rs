@@ -759,6 +759,10 @@ impl LedgerState {
 #[cfg(test)]
 mod tests {
     use cryptarchia::tests::{config, generate_proof, utxo};
+    use lb_core::mantle::{
+        channel::{ChannelState, Channels, SlotTimeframe, SlotTimeout},
+        ops::channel::config::{Keys, ZkKeys},
+    };
     use lb_core::{
         events::{Event, EventPayload},
         mantle::{
@@ -779,10 +783,6 @@ mod tests {
             },
         },
         proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
-    };
-    use lb_core::mantle::{
-        channel::{ChannelState, Channels, SlotTimeframe, SlotTimeout},
-        ops::channel::config::{Keys, ZkKeys},
     };
     use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey, ZkKey, ZkPublicKey};
     use num_bigint::BigUint;

@@ -222,7 +222,7 @@ pub(super) async fn submit_zone_channel_config(
             posting_timeout.into(),
             ZONE_CHANNEL_WITHDRAW_THRESHOLD,
             ZONE_CHANNEL_DEPOSIT_THRESHOLD,
-            // TODO: TOTO!
+            // The ZK key of the sequencer is mocked in this test
             ZkKeys::new_unchecked([ZkPublicKey::zero()].into()),
         )
         .await

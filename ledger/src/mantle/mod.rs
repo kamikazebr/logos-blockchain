@@ -255,8 +255,7 @@ impl LedgerState {
                 utxo_tree,
                 self.channels.frozen_notes(),
                 sdp_declare_op,
-                sdp_declare_zk_sig,
-                sdp_declare_ed_sig,
+                (sdp_declare_zk_sig, sdp_declare_ed_sig),
                 tx_hash,
                 &config.sdp_config,
             )

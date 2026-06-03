@@ -216,8 +216,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        mantle::{Note, NoteId, Utxo, ledger::Utxos},
-        sdp::{Locator, MinStake, ProviderId, ServiceType},
+        mantle::{NoteId, Utxo},
+        sdp::{Locator, ProviderId, ServiceType},
     };
 
     fn make_frozen_note_in_utxo_tree() -> (Utxos, FrozenNotes, NoteId) {

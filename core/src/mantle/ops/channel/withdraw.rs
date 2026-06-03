@@ -179,14 +179,15 @@ impl Operation<WithdrawValidationContext<'_>> for ChannelWithdrawOp {
 
 #[cfg(test)]
 mod tests {
+    use lb_cryptarchia_engine::Slot;
     use lb_groth16::Fr;
     use lb_key_management_system_keys::keys::{Ed25519Key, UnsecuredZkKey, ZkPublicKey};
     use rpds::HashTrieMapSync;
 
     use super::*;
     use crate::mantle::{
-        Note, Utxo,
-        channel::{ChannelState, Channels},
+        Note, NoteId, Utxo,
+        channel::ChannelState,
         ops::channel::{
             Ed25519PublicKey, MsgId,
             config::{Keys, ZkKeys},
@@ -213,6 +214,45 @@ mod tests {
         tree
     }
 
+    /// Constructs a [`ChannelState`] with `1` thresholds and no posting
+    /// timeframe/timeout. `frozen_notes` lists the `(epoch, pk, note_id)`
+    /// entries to register in the channel's frozen-note map.
+    fn channel_state(
+        accredited_keys: Vec<Ed25519PublicKey>,
+        sequencers: Vec<ZkPublicKey>,
+        floating_balance: u64,
+        solvency: u64,
+        frozen_notes: Vec<(Epoch, ZkPublicKey, NoteId)>,
+    ) -> ChannelState {
+        let mut frozen_note_map = HashTrieMapSync::new_sync();
+        for (epoch, pk, note_id) in frozen_notes {
+            frozen_note_map = frozen_note_map.insert((epoch, pk), note_id);
+        }
+        ChannelState {
+            accredited_keys: Keys::try_from(accredited_keys).unwrap().into(),
+            configuration_threshold: 1,
+            tip_message: MsgId::root(),
+            tip_slot: Slot::default(),
+            tip_sequencer: 0,
+            tip_sequencer_starting_slot: Slot::default(),
+            posting_timeframe: 0.into(),
+            posting_timeout: 0.into(),
+            withdraw_threshold: 1,
+            withdrawal_nonce: 0,
+            floating_balance,
+            solvency,
+            frozen_note_map,
+            sequencers_zk_pks: ZkKeys::try_from(sequencers).unwrap().into(),
+        }
+    }
+
+    /// Wraps a single channel state into a fresh `Channels`.
+    fn channels_with(channel_id: ChannelId, state: ChannelState) -> Channels {
+        let mut channels = Channels::new();
+        channels.channels = channels.channels.insert(channel_id, state);
+        channels
+    }
+
     fn channel_with_frozen_note(
         channel_id: ChannelId,
         floating_balance: u64,
@@ -223,30 +263,20 @@ mod tests {
         let frozen_utxo = make_frozen_utxo(frozen_value, pk);
         let note_id = frozen_utxo.id();
 
-        let mut channels = Channels::new();
+        let mut channels = channels_with(
+            channel_id,
+            channel_state(
+                vec![ed_pk(0)],
+                vec![pk],
+                floating_balance,
+                floating_balance + frozen_value,
+                vec![(epoch, pk, note_id)],
+            ),
+        );
         channels.frozen_notes = channels
             .frozen_notes
             .freeze(Note::new(frozen_value, pk), &note_id)
             .unwrap();
-        channels.channels = channels.channels.insert(
-            channel_id,
-            ChannelState {
-                accredited_keys: Keys::from(ed_pk(0)).into(),
-                configuration_threshold: 1,
-                tip_message: MsgId::root(),
-                tip_slot: Default::default(),
-                tip_sequencer: 0,
-                tip_sequencer_starting_slot: Default::default(),
-                posting_timeframe: 0.into(),
-                posting_timeout: 0.into(),
-                withdraw_threshold: 1,
-                withdrawal_nonce: 0,
-                floating_balance,
-                solvency: floating_balance + frozen_value,
-                frozen_note_map: HashTrieMapSync::new_sync().insert((epoch, pk), note_id),
-                sequencers_zk_pks: ZkKeys::from(pk).into(),
-            },
-        );
         (channels, frozen_utxo)
     }
 
@@ -311,7 +341,16 @@ mod tests {
         let id_old = utxo_old.id();
         let id_new = utxo_new.id();
 
-        let mut channels = Channels::new();
+        let mut channels = channels_with(
+            channel_id,
+            channel_state(
+                vec![ed_pk(0)],
+                vec![pk],
+                0,
+                20,
+                vec![(epoch_old, pk, id_old), (epoch_new, pk, id_new)],
+            ),
+        );
         channels.frozen_notes = channels
             .frozen_notes
             .freeze(Note::new(10, pk), &id_old)
@@ -320,27 +359,6 @@ mod tests {
             .frozen_notes
             .freeze(Note::new(10, pk), &id_new)
             .unwrap();
-        channels.channels = channels.channels.insert(
-            channel_id,
-            ChannelState {
-                accredited_keys: Keys::from(ed_pk(0)).into(),
-                configuration_threshold: 1,
-                tip_message: MsgId::root(),
-                tip_slot: Default::default(),
-                tip_sequencer: 0,
-                tip_sequencer_starting_slot: Default::default(),
-                posting_timeframe: 0.into(),
-                posting_timeout: 0.into(),
-                withdraw_threshold: 1,
-                withdrawal_nonce: 0,
-                floating_balance: 0,
-                solvency: 20,
-                frozen_note_map: HashTrieMapSync::new_sync()
-                    .insert((epoch_old, pk), id_old)
-                    .insert((epoch_new, pk), id_new),
-                sequencers_zk_pks: ZkKeys::from(pk).into(),
-            },
-        );
         let utxos = utxo_tree(vec![utxo_old, utxo_new]);
 
         // Withdraw 5: floating=0, so releases epoch_new first (most recent).
@@ -369,30 +387,24 @@ mod tests {
         let id0 = utxo0.id();
         let id1 = utxo1.id();
 
-        let mut channels = Channels::new();
-        channels.frozen_notes = channels.frozen_notes.freeze(Note::new(5, pk0), &id0).unwrap();
-        channels.frozen_notes = channels.frozen_notes.freeze(Note::new(5, pk1), &id1).unwrap();
-        channels.channels = channels.channels.insert(
+        let mut channels = channels_with(
             channel_id,
-            ChannelState {
-                accredited_keys: Keys::try_from(vec![ed_pk(0), ed_pk(1)]).unwrap().into(),
-                configuration_threshold: 1,
-                tip_message: MsgId::root(),
-                tip_slot: Default::default(),
-                tip_sequencer: 0,
-                tip_sequencer_starting_slot: Default::default(),
-                posting_timeframe: 0.into(),
-                posting_timeout: 0.into(),
-                withdraw_threshold: 1,
-                withdrawal_nonce: 0,
-                floating_balance: 0,
-                solvency: 10,
-                frozen_note_map: HashTrieMapSync::new_sync()
-                    .insert((epoch, pk0), id0)
-                    .insert((epoch, pk1), id1),
-                sequencers_zk_pks: ZkKeys::try_from(vec![pk0, pk1]).unwrap().into(),
-            },
+            channel_state(
+                vec![ed_pk(0), ed_pk(1)],
+                vec![pk0, pk1],
+                0,
+                10,
+                vec![(epoch, pk0, id0), (epoch, pk1, id1)],
+            ),
         );
+        channels.frozen_notes = channels
+            .frozen_notes
+            .freeze(Note::new(5, pk0), &id0)
+            .unwrap();
+        channels.frozen_notes = channels
+            .frozen_notes
+            .freeze(Note::new(5, pk1), &id1)
+            .unwrap();
         let utxos = utxo_tree(vec![utxo0, utxo1]);
 
         // Withdraw 7: floating=0, release epoch 1 (both pk0 and pk1 unfrozen → +10)
@@ -420,30 +432,24 @@ mod tests {
         let id_old = utxo_old.id();
         let id_new = utxo_new.id();
 
-        let mut channels = Channels::new();
-        channels.frozen_notes = channels.frozen_notes.freeze(Note::new(8, pk), &id_old).unwrap();
-        channels.frozen_notes = channels.frozen_notes.freeze(Note::new(8, pk), &id_new).unwrap();
-        channels.channels = channels.channels.insert(
+        let mut channels = channels_with(
             channel_id,
-            ChannelState {
-                accredited_keys: Keys::from(ed_pk(0)).into(),
-                configuration_threshold: 1,
-                tip_message: MsgId::root(),
-                tip_slot: Default::default(),
-                tip_sequencer: 0,
-                tip_sequencer_starting_slot: Default::default(),
-                posting_timeframe: 0.into(),
-                posting_timeout: 0.into(),
-                withdraw_threshold: 1,
-                withdrawal_nonce: 0,
-                floating_balance: 0,
-                solvency: 16,
-                frozen_note_map: HashTrieMapSync::new_sync()
-                    .insert((epoch_old, pk), id_old)
-                    .insert((epoch_new, pk), id_new),
-                sequencers_zk_pks: ZkKeys::from(pk).into(),
-            },
+            channel_state(
+                vec![ed_pk(0)],
+                vec![pk],
+                0,
+                16,
+                vec![(epoch_old, pk, id_old), (epoch_new, pk, id_new)],
+            ),
         );
+        channels.frozen_notes = channels
+            .frozen_notes
+            .freeze(Note::new(8, pk), &id_old)
+            .unwrap();
+        channels.frozen_notes = channels
+            .frozen_notes
+            .freeze(Note::new(8, pk), &id_new)
+            .unwrap();
         let utxos = utxo_tree(vec![utxo_old, utxo_new]);
 
         // Withdraw 10: epoch_new releases 8 (total 8 < 10), epoch_old releases 8

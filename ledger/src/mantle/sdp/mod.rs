@@ -437,11 +437,11 @@ impl SdpLedger {
         utxo_tree: &UtxoTree,
         frozen_notes: &FrozenNotes,
         op: &SDPDeclareOp,
-        zk_sig: &ZkSignature,
-        ed25519_sig: &Ed25519Signature,
+        signatures: (&ZkSignature, &Ed25519Signature),
         tx_hash: TxHash,
         config: &Config,
     ) -> Result<(Self, Events), Error> {
+        let (zk_sig, ed25519_sig) = signatures;
         let Some(service_state) = self.services.get_mut(&op.service_type) else {
             return Err(Error::ServiceNotFound(op.service_type));
         };
@@ -738,8 +738,7 @@ mod tests {
                 utxos,
                 frozen_notes,
                 op,
-                &zk_sig,
-                &ed25519_sig,
+                (&zk_sig, &ed25519_sig),
                 tx_hash,
                 config,
             )

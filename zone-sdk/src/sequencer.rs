@@ -1729,16 +1729,16 @@ where
             } => {
                 // Safe to unwrap — is_ready() guarantees state is initialized
                 let s = self.state.as_mut().unwrap();
-                let signed_tx = create_channel_config_tx(
-                    self.channel_id,
-                    &[&self.signing_key],
+                let config_op = ChannelConfigOp {
+                    channel: self.channel_id,
                     keys,
                     posting_timeframe,
                     posting_timeout,
                     configuration_threshold,
                     withdraw_threshold,
-                    zkkeys,
-                );
+                    sequencer_zk_pks: zkkeys,
+                };
+                let signed_tx = create_channel_config_tx(&[&self.signing_key], config_op);
                 s.submit_other(signed_tx.clone());
                 let result = PublishResult {
                     inscription_id: signed_tx.mantle_tx.hash(),
@@ -2649,25 +2649,9 @@ fn create_inscribe_tx(
 }
 
 fn create_channel_config_tx(
-    channel_id: ChannelId,
     signing_keys: &[&Ed25519Key],
-    keys: Keys,
-    posting_timeframe: SlotTimeframe,
-    posting_timeout: SlotTimeout,
-    configuration_threshold: u16,
-    withdraw_threshold: u16,
-    sequencer_zk_pks: ZkKeys,
+    config_op: ChannelConfigOp,
 ) -> SignedMantleTx {
-    let config_op = ChannelConfigOp {
-        channel: channel_id,
-        keys,
-        posting_timeframe,
-        posting_timeout,
-        configuration_threshold,
-        withdraw_threshold,
-        sequencer_zk_pks,
-    };
-
     // TODO: fund tx
     let config_tx = MantleTx([Op::ChannelConfig(config_op)].into());
 

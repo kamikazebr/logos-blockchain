@@ -162,22 +162,20 @@ impl Operation<DepositValidationContext<'_>> for DepositOp {
 
 #[cfg(test)]
 mod tests {
+    use lb_cryptarchia_engine::{Epoch, Slot};
     use lb_groth16::{Field as _, Fr};
     use lb_key_management_system_keys::keys::{Ed25519Key, UnsecuredZkKey, ZkKey};
     use rand::thread_rng;
     use rpds::HashTrieMapSync;
 
     use super::*;
-    use crate::{
-        mantle::{
-            Note, Utxo,
-            channel::{ChannelState, Channels},
-            ops::channel::{
-                Ed25519PublicKey, MsgId,
-                config::{Keys, ZkKeys},
-            },
+    use crate::mantle::{
+        Note, NoteId, Utxo,
+        channel::ChannelState,
+        ops::channel::{
+            Ed25519PublicKey, MsgId,
+            config::{Keys, ZkKeys},
         },
-        sdp::locked_notes::LockedNotes,
     };
 
     fn ed_pk(seed: u8) -> Ed25519PublicKey {
@@ -209,36 +207,58 @@ mod tests {
         tree
     }
 
-    fn channel_with_sequencers(channel_id: ChannelId, balance: u64, n: u8) -> Channels {
+    /// Constructs a [`ChannelState`] with `1` thresholds and no posting
+    /// timeframe/timeout. `frozen_notes` lists the `(epoch, pk, note_id)`
+    /// entries to register in the channel's frozen-note map.
+    fn channel_state(
+        accredited_keys: Vec<Ed25519PublicKey>,
+        sequencers: Vec<ZkPublicKey>,
+        floating_balance: u64,
+        solvency: u64,
+        frozen_notes: Vec<(Epoch, ZkPublicKey, NoteId)>,
+    ) -> ChannelState {
+        let mut frozen_note_map = HashTrieMapSync::new_sync();
+        for (epoch, pk, note_id) in frozen_notes {
+            frozen_note_map = frozen_note_map.insert((epoch, pk), note_id);
+        }
+        ChannelState {
+            accredited_keys: Keys::try_from(accredited_keys).unwrap().into(),
+            configuration_threshold: 1,
+            tip_message: MsgId::root(),
+            tip_slot: Slot::default(),
+            tip_sequencer: 0,
+            tip_sequencer_starting_slot: Slot::default(),
+            posting_timeframe: 0.into(),
+            posting_timeout: 0.into(),
+            withdraw_threshold: 1,
+            withdrawal_nonce: 0,
+            floating_balance,
+            solvency,
+            frozen_note_map,
+            sequencers_zk_pks: ZkKeys::try_from(sequencers).unwrap().into(),
+        }
+    }
+
+    /// Wraps a single channel state into a fresh `Channels`.
+    fn channels_with(channel_id: ChannelId, state: ChannelState) -> Channels {
         let mut channels = Channels::new();
-        channels.channels = channels.channels.insert(
-            channel_id,
-            ChannelState {
-                accredited_keys: Keys::try_from(
-                    std::iter::once(ed_pk(0))
-                        .chain((1..n).map(ed_pk))
-                        .collect::<Vec<_>>(),
-                )
-                .unwrap()
-                .into(),
-                configuration_threshold: 1,
-                tip_message: MsgId::root(),
-                tip_slot: Default::default(),
-                tip_sequencer: 0,
-                tip_sequencer_starting_slot: Default::default(),
-                posting_timeframe: 0.into(),
-                posting_timeout: 0.into(),
-                withdraw_threshold: 1,
-                withdrawal_nonce: 0,
-                floating_balance: balance,
-                solvency: balance,
-                frozen_note_map: HashTrieMapSync::new_sync(),
-                sequencers_zk_pks: ZkKeys::try_from((0..n).map(zk_pk).collect::<Vec<_>>())
-                    .unwrap()
-                    .into(),
-            },
-        );
+        channels.channels = channels.channels.insert(channel_id, state);
         channels
+    }
+
+    /// Channel with `n` sequencers (zk keys `0..n`), `n.max(1)` accredited keys
+    /// and the given floating balance / solvency.
+    fn channel_with_sequencers(channel_id: ChannelId, balance: u64, n: u8) -> Channels {
+        channels_with(
+            channel_id,
+            channel_state(
+                (0..n.max(1)).map(ed_pk).collect(),
+                (0..n).map(zk_pk).collect(),
+                balance,
+                balance,
+                vec![],
+            ),
+        )
     }
 
     fn execute_deposit(channels: Channels, value: u64) -> Channels {
@@ -291,14 +311,22 @@ mod tests {
         let channels = channel_with_sequencers(channel_id, 0, 1);
         let updated = execute_deposit(channels, 5);
         assert_eq!(
-            updated.mint_eligible_channels.iter().filter(|&&id| id == channel_id).count(),
+            updated
+                .mint_eligible_channels
+                .iter()
+                .filter(|&&id| id == channel_id)
+                .count(),
             1
         );
 
         // Second deposit must not add it again
         let updated2 = execute_deposit(updated, 5);
         assert_eq!(
-            updated2.mint_eligible_channels.iter().filter(|&&id| id == channel_id).count(),
+            updated2
+                .mint_eligible_channels
+                .iter()
+                .filter(|&&id| id == channel_id)
+                .count(),
             1
         );
     }
