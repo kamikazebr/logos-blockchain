@@ -21,7 +21,10 @@ use overwatch::{
 };
 use tokio::sync::oneshot::{self, error::RecvError};
 
-use crate::{TipResponse, UtxoWithKeyId, WalletMsg, WalletServiceError, WalletServiceSettings};
+use crate::{
+    ClaimableVoucherInfo, TipResponse, UtxoWithKeyId, WalletMsg, WalletServiceError,
+    WalletServiceSettings,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum WalletApiError {
@@ -259,6 +262,17 @@ where
             .send(WalletMsg::GenerateNewVoucherSecret { resp_tx })
             .await?;
         Ok(rx.await?)
+    }
+
+    pub async fn get_claimable_vouchers(
+        &self,
+        tip: Option<HeaderId>,
+    ) -> Result<TipResponse<Vec<ClaimableVoucherInfo>>, WalletApiError> {
+        let (resp_tx, rx) = oneshot::channel();
+        self.relay
+            .send(WalletMsg::GetClaimableVouchers { tip, resp_tx })
+            .await?;
+        Ok(rx.await??)
     }
 }
 

@@ -4,7 +4,9 @@ use futures::StreamExt as _;
 use lb_api_service::http::consensus::leader::LeaderClaimResponseBody;
 use lb_common_http_client::ProcessedBlockEvent;
 use lb_groth16::fr_to_bytes;
-use lb_http_api_common::bodies::wallet::balance::WalletBalanceResponseBody;
+use lb_http_api_common::bodies::wallet::{
+    balance::WalletBalanceResponseBody, claimable_vouchers::WalletClaimableVouchersResponseBody,
+};
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_node::{
     Transaction as _, TxHash,
@@ -39,6 +41,8 @@ async fn leader_claim() {
     let node = &nodes[0];
     let mut block_stream = node.client.blocks_stream().await.unwrap();
 
+    wait_for_claimable_vouchers(&node.client, Duration::from_secs(30)).await;
+
     let tx_hash = claim_leader_rewards(&node.client, Duration::from_secs(30)).await;
     wait_for_tx_inclusion(&mut block_stream, tx_hash).await;
 }
@@ -56,6 +60,42 @@ fn test_config(mut config: RunConfig, leader_funding_pk: ZkPublicKey) -> RunConf
     config.user.cryptarchia.leader.wallet.funding_pk = leader_funding_pk;
 
     config
+}
+
+async fn get_claimable_vouchers(node: &NodeHttpClient) -> WalletClaimableVouchersResponseBody {
+    let response = reqwest::Client::new()
+        .get(api_url(node, "leader/claim/vouchers"))
+        .send()
+        .await
+        .expect("claimable vouchers request should not fail");
+
+    assert!(
+        response.status().is_success(),
+        "claimable vouchers request should succeed, got status: {} body: {}",
+        response.status(),
+        response.text().await.unwrap_or_default(),
+    );
+
+    response
+        .json()
+        .await
+        .expect("claimable vouchers response should be valid JSON")
+}
+
+async fn wait_for_claimable_vouchers(node: &NodeHttpClient, duration: Duration) {
+    timeout(duration, async {
+        loop {
+            let claimable_vouchers = get_claimable_vouchers(node).await;
+
+            if !claimable_vouchers.vouchers.is_empty() {
+                return;
+            }
+
+            sleep(Duration::from_millis(500)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("leader should have claimable vouchers within {duration:?}"));
 }
 
 async fn claim_leader_rewards(node: &NodeHttpClient, duration: Duration) -> TxHash {
