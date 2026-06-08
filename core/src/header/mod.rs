@@ -229,8 +229,8 @@ fn test_serde() {
 /// encoding.
 ///
 /// It emits three vectors:
-/// - **empty block**: `block_root` of a block with no transactions
-///   (`Merkle([]) == [0u8; 32]`);
+/// - **empty block**: `block_root` of a block with no transactions (`Merkle([])
+///   == [0u8; 32]`);
 /// - **one tx per op kind**: a block whose transactions each carry a single
 ///   operation, one per distinct mantle [`Op`] variant; for it we print every
 ///   leaf (`tx_hash`) and the resulting `block_root`;
@@ -242,9 +242,10 @@ fn test_serde() {
 /// where the Merkle tree pads the leaf set to the next power of two with
 /// all-zero leaves and hashes inner nodes as `blake2b256(left || right)`.
 ///
-/// `HeaderId (block_id) = blake2b256( b"BLOCK_ID_V1" || bedrock_version (1B) ||`
-/// `parent_block (32B) || slot_le (8B) || block_root (32B) || leader_voucher`
-/// `(32B) || entropy_contribution (32B) || proof (128B) || leader_key (32B) )`.
+/// `HeaderId (block_id) = blake2b256( b"BLOCK_ID_V1" || bedrock_version (1B)
+/// ||` `parent_block (32B) || slot_le (8B) || block_root (32B) ||
+/// leader_voucher` `(32B) || entropy_contribution (32B) || proof (128B) ||
+/// leader_key (32B) )`.
 ///
 /// The test is `#[ignore]`d so it is skipped by `cargo test --all-features`.
 /// Run it on demand with:
@@ -431,24 +432,27 @@ mod block_root_test_vectors {
         let txs_with_names = one_tx_per_op();
         let txs: Vec<MantleTx> = txs_with_names.iter().map(|(_, tx)| tx.clone()).collect();
         println!("================================================================");
-        println!("vector 2  : one transaction per op kind ({} transactions)", txs.len());
+        println!(
+            "vector 2  : one transaction per op kind ({} transactions)",
+            txs.len()
+        );
         for (i, (name, tx)) in txs_with_names.iter().enumerate() {
             println!("leaf[{i}]   : {} (op: {})", hex::encode(tx.hash().0), name);
         }
         let block_root = merkle::calculate_block_root(&txs);
         println!("block_root: {}", hex::encode(block_root));
 
-        // 3. HeaderId reusing vector 2's block_root. Every field is given a
-        //    distinct value so that a field-transposition bug in another
-        //    implementation cannot be masked by shared bytes. The proof is a
-        //    synthetic (non-verifying) proof built only to exercise the hash.
+        // 3. HeaderId reusing vector 2's block_root. Every field is given a distinct
+        //    value so that a field-transposition bug in another implementation cannot
+        //    be masked by shared bytes. The proof is a synthetic (non-verifying) proof
+        //    built only to exercise the hash.
         let parent_block = HeaderId([0x11u8; 32]);
         let slot = Slot::from(42u64);
         let proof = Groth16LeaderProof::from_parts(
             lb_pol::PoLProof::from_bytes(&[0x22u8; 128]),
-            Fr::from(0x5555u64),                                      // entropy_contribution
-            Ed25519Key::from_bytes(&[0x33u8; 32]).public_key(),      // leader_key
-            VoucherCm::from(Fr::from(0x4444u64)),                    // leader_voucher
+            Fr::from(0x5555u64), // entropy_contribution
+            Ed25519Key::from_bytes(&[0x33u8; 32]).public_key(), // leader_key
+            VoucherCm::from(Fr::from(0x4444u64)), // leader_voucher
         );
         let header = Header::new(parent_block, ContentId(block_root), slot, proof);
         let header_id = header.id();
@@ -468,20 +472,39 @@ mod block_root_test_vectors {
         h.update(proof.proof().to_bytes());
         h.update(proof.leader_key().to_bytes());
         let manual: [u8; 32] = h.finalize().into();
-        assert_eq!(manual, header_id.0, "manual preimage must match Header::id()");
+        assert_eq!(
+            manual, header_id.0,
+            "manual preimage must match Header::id()"
+        );
 
         println!("================================================================");
         // Field labels match the names in the `block_id`/`Header` specification.
         println!("vector 3  : HeaderId (block_id) reusing vector 2's block_root");
-        println!("{:20}: {:02x}", "bedrock_version", Version::Bedrock.as_byte());
+        println!(
+            "{:20}: {:02x}",
+            "bedrock_version",
+            Version::Bedrock.as_byte()
+        );
         println!("{:20}: {}", "parent_block", hex::encode(parent_block.0));
         println!("{:20}: {}", "slot", u64::from(slot));
         println!("{:20}: {}", "block_root", hex::encode(block_root));
         // proof_of_leadership fields (here, the deterministic genesis proof).
-        println!("{:20}: {}", "leader_voucher", hex::encode(proof.voucher_cm().to_bytes()));
-        println!("{:20}: {}", "entropy_contribution", hex::encode(fr_to_bytes(&proof.entropy())));
+        println!(
+            "{:20}: {}",
+            "leader_voucher",
+            hex::encode(proof.voucher_cm().to_bytes())
+        );
+        println!(
+            "{:20}: {}",
+            "entropy_contribution",
+            hex::encode(fr_to_bytes(&proof.entropy()))
+        );
         println!("{:20}: {}", "proof", hex::encode(proof.proof().to_bytes()));
-        println!("{:20}: {}", "leader_key", hex::encode(proof.leader_key().to_bytes()));
+        println!(
+            "{:20}: {}",
+            "leader_key",
+            hex::encode(proof.leader_key().to_bytes())
+        );
         println!("{:20}: {}", "block_id", hex::encode(header_id.0));
         println!("================================================================");
     }
