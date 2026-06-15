@@ -103,6 +103,8 @@ pub enum Error {
     HeaderIdNotFound(HeaderId),
     #[error("Parent header ID not found for child={0}")]
     ParentIdNotFound(HeaderId),
+    #[error("Chain is not online")]
+    ChainNotOnline,
 }
 
 #[derive(Derivative)]
