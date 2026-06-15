@@ -2,6 +2,9 @@
 set -e
 
 VERSION="${1:-0.5.1}"
+# Release tags and asset names are v-prefixed (e.g. v0.5.1); normalize so a
+# bare ("0.5.1") or already-prefixed ("v0.5.1") arg both resolve correctly.
+VERSION="v${VERSION#v}"
 PLATFORM="${2:-linux-x86_64}"
 OUT_PATH="${3:-/opt/circuits}"
 
